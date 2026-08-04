@@ -224,7 +224,7 @@ locals {
       approvers = {
         L = [
           for approvers_group in policy.approvers_groups :
-            { S = data.aws_identitystore_group.approvers_group[approvers_group].display_name }
+          { S = data.aws_identitystore_group.approvers_group[approvers_group].display_name }
         ]
       },
       createdAt = {
@@ -233,7 +233,7 @@ locals {
       groupIds = {
         L = [
           for approvers_group in policy.approvers_groups :
-            { S = data.aws_identitystore_group.approvers_group[approvers_group].group_id }
+          { S = data.aws_identitystore_group.approvers_group[approvers_group].group_id }
         ]
       },
       modifiedBy = {

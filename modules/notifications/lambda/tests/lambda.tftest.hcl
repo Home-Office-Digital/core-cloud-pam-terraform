@@ -5,12 +5,12 @@ run "plan_notification_lambda" {
   command = plan
 
   variables {
-    function_name          = "team-sns-handler-test"
-    role_name              = "team-sns-handler-role-test"
-    policy_name            = "team-sns-handler-policy-test"
-    lambda_permission_sid  = "AllowExecutionFromSNSTest"
-    sns_topic_name         = "team-notifications-test"
-    source_file            = "./src/lambda_function.py"
+    function_name         = "team-sns-handler-test"
+    role_name             = "team-sns-handler-role-test"
+    policy_name           = "team-sns-handler-policy-test"
+    lambda_permission_sid = "AllowExecutionFromSNSTest"
+    sns_topic_name        = "team-notifications-test"
+    source_file           = "./src/lambda_function.py"
   }
 
   override_data {

@@ -8,8 +8,8 @@ run "plan_secret" {
     description = "TEAM app secret for tests"
     kms_key_id  = "arn:aws:kms:eu-west-2:111122223333:key/abcd-1234"
     secret_data = {
-      username = "team-user"
-      password = "team-password"
+      field_one = "sample-value-one"
+      field_two = "sample-value-two"
     }
   }
 
@@ -42,8 +42,8 @@ run "plan_secret_with_rotated_value" {
     description = "TEAM app secret for rotated test"
     kms_key_id  = "arn:aws:kms:eu-west-2:111122223333:key/abcd-1234"
     secret_data = {
-      username = "team-user-rotated"
-      password = "team-password-rotated"
+      field_one = "sample-value-one-rotated"
+      field_two = "sample-value-two-rotated"
     }
   }
 
