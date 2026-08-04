@@ -75,7 +75,7 @@ data "archive_file" "lambda" {
 }
 
 resource "aws_signer_signing_profile" "lambda_signing" {
-  name        = "lambda-signing-profile"
+  name        = "lambdasigningprofile"
   platform_id = "AWSLambda-SHA384-ECDSA"
 }
 
