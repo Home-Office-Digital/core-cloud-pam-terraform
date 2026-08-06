@@ -37,8 +37,6 @@ data "aws_iam_policy_document" "cloudtrail_kms" {
       "kms:DescribeKey"
     ]
 
-    resources = [
-      aws_kms_key.cloudtrail_eds.arn
-    ]
+    resources = ["*"]
   }
 }
