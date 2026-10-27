@@ -11,7 +11,14 @@ resource "aws_kms_key" "cloudtrail_eds" {
   description             = "CMK for CloudTrail Event Data Store"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+}
 
+# The policy is attached separately rather than inline on aws_kms_key. Inline, the key
+# depends on the policy document, so the document cannot reference the key's own ARN and
+# resources has to be "*". Attaching it here inverts that: the document can scope each
+# statement to this key.
+resource "aws_kms_key_policy" "cloudtrail_eds" {
+  key_id = aws_kms_key.cloudtrail_eds.id
   policy = data.aws_iam_policy_document.cloudtrail_kms.json
 }
 
@@ -20,7 +27,24 @@ resource "aws_kms_alias" "cloudtrail_eds" {
   target_key_id = aws_kms_key.cloudtrail_eds.key_id
 }
 
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "cloudtrail_kms" {
+  # Without this statement the key would have no administrator once the policy is applied,
+  # and the policy itself could never be changed again. AWS's policy lockout safety check
+  # also rejects a key policy that does not grant the account root kms:PutKeyPolicy.
+  statement {
+    sid = "Allow account administration of the key"
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    actions   = ["kms:*"]
+    resources = [aws_kms_key.cloudtrail_eds.arn]
+  }
+
   statement {
     sid = "Allow CloudTrail to use the key"
 
@@ -37,6 +61,6 @@ data "aws_iam_policy_document" "cloudtrail_kms" {
       "kms:DescribeKey"
     ]
 
-    resources = ["*"]
+    resources = [aws_kms_key.cloudtrail_eds.arn]
   }
 }
