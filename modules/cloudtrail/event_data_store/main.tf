@@ -5,6 +5,13 @@ resource "aws_cloudtrail_event_data_store" "team_data_store" {
   tags                           = var.tags
   termination_protection_enabled = true
   kms_key_id                     = aws_kms_key.cloudtrail_eds.arn
+
+  # Referencing the key ARN alone is not enough ordering. The key is created with the
+  # default account-only policy and the CloudTrail grant arrives separately via
+  # aws_kms_key_policy, so without this Terraform may create the event data store in
+  # parallel with the attachment. CloudTrail validates KMS access at creation time and
+  # would fail. This was implicit while the policy was inline on the key.
+  depends_on = [aws_kms_key_policy.cloudtrail_eds]
 }
 
 resource "aws_kms_key" "cloudtrail_eds" {
