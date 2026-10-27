@@ -21,14 +21,30 @@ DynamoDB removes a set attribute entirely when its last element is deleted, so "
 empty" is expressible in Step Functions as an `IsPresent: false` check — no Lambda and no
 arithmetic.
 
-Two deliberate omissions:
+## A key-only row is not a held assignment
+
+Deleting the last set member removes the **attribute**, not the **item**: DynamoDB leaves the
+row behind with only its key attributes, and `UpdateItem` will
+[create a row even where none existed](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_UpdateItem.html),
+so a revoke with no prior grant also produces one.
+
+**Consumers must therefore test `attribute_exists(activeRequestIds)`, not the presence of a
+row.** This matters most for the reconciliation sweep: it converges in both directions, so
+treating every row returned by a `Query` on `applicationArn` as a live reference would make it
+*recreate* assignments for sessions that have already ended — standing access, which is the
+thing the design exists to prevent. Row presence only tells you the pair was seen before.
+
+## Two deliberate omissions
 
 - **`activeRequestIds` is not declared** as an attribute. DynamoDB only requires key
   attributes in the schema. It must remain a **String Set**, not a List, because atomic
   `ADD`/`DELETE` update expressions are only available on sets; a List would force a
   read-modify-write and reintroduce the race this table exists to remove.
-- **No TTL.** Entries disappear when their set empties. A TTL could silently expire a
-  counter still holding a live assignment open.
+- **No TTL.** Because empty rows persist as tombstones, a TTL looks like a tidy way to reap
+  them. But a TTL timestamp written at grant time can fire while the set is still non-empty —
+  an extended session, or a second overlapping session — deleting a live counter and leaving
+  the next revoke to see an empty set and drop an assignment another session is still using.
+  Tombstone count is bounded by distinct `(application, principal)` pairs, so leave them.
 
 The table `name` must match the name the state machines build from the Amplify `env`
 parameter, for example `TEAM-AppStream-RefCount-main`.

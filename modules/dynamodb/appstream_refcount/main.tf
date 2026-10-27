@@ -26,8 +26,10 @@ resource "aws_dynamodb_table" "appstream_refcount" {
   # on sets. Declaring it (or modelling it as a List) forces read-modify-write and
   # reintroduces the race this table exists to remove.
 
-  # Do not add a TTL. Entries disappear when their set empties; a TTL could expire a
-  # counter that is still holding a live assignment open.
+  # Do not add a TTL. Once a set empties the row persists as a key-only tombstone, which
+  # makes a TTL look like a tidy way to reap them - but a timestamp written at grant time
+  # can fire while the set is still non-empty and delete a live counter. See README.md,
+  # which also covers why consumers must test for the attribute and not the row.
 
   point_in_time_recovery {
     enabled = var.point_in_time_recovery_enabled
