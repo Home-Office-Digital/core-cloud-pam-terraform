@@ -58,9 +58,13 @@ resource "aws_kms_key" "appstream_refcount" {
 }
 
 resource "aws_kms_alias" "appstream_refcount" {
-  # Derived from the table name rather than fixed, so the alias cannot collide if the
-  # module is deployed more than once in an account.
-  name          = "alias/${lower(var.name)}"
+  # Mirrors the table name exactly rather than being fixed or case-folded. Fixed would
+  # collide if the module were deployed twice in an account; lower() would also collide,
+  # because var.name permits a mixed-case env suffix and DynamoDB table names are
+  # case-sensitive, so TEAM-AppStream-RefCount-dev and -DEV are distinct tables that both
+  # fold to one alias. KMS aliases allow uppercase, so mirroring inherits the table's own
+  # uniqueness and needs no mapping to reason about.
+  name          = "alias/${var.name}"
   target_key_id = aws_kms_key.appstream_refcount.key_id
 }
 

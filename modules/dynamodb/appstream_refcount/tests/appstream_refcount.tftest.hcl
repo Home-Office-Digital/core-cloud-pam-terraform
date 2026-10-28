@@ -49,10 +49,11 @@ run "design_constraints" {
     error_message = "Key rotation must be enabled on the CMK."
   }
 
-  # Fixed aliases collide if the module is deployed twice in one account.
+  # A fixed alias would collide if the module were deployed twice in one account, and a
+  # case-folded one would collide between env suffixes differing only by case.
   assert {
-    condition     = aws_kms_alias.appstream_refcount.name == "alias/team-appstream-refcount-test"
-    error_message = "Alias must derive from the table name."
+    condition     = aws_kms_alias.appstream_refcount.name == "alias/TEAM-AppStream-RefCount-test"
+    error_message = "Alias must mirror the table name exactly, without case folding."
   }
 }
 
