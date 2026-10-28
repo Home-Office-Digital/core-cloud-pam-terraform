@@ -37,10 +37,61 @@ resource "aws_dynamodb_table" "appstream_refcount" {
 
   server_side_encryption {
     enabled     = true
-    kms_key_arn = var.kms_key_arn
+    kms_key_arn = aws_kms_key.appstream_refcount.arn
   }
 
   deletion_protection_enabled = var.deletion_protection_enabled
 
   tags = var.tags
+
+  # The key is created with the default account-only policy and the policy below is
+  # attached separately, so without this the table could be created against the
+  # transient default policy. Keeps the ordering deterministic.
+  depends_on = [aws_kms_key_policy.appstream_refcount]
+}
+
+resource "aws_kms_key" "appstream_refcount" {
+  description             = "CMK for the TEAM AppStream assignment reference-count table"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+  tags                    = var.tags
+}
+
+resource "aws_kms_alias" "appstream_refcount" {
+  # Mirrors the table name exactly rather than being fixed or case-folded. Fixed would
+  # collide if the module were deployed twice in an account; lower() would also collide,
+  # because var.name permits a mixed-case env suffix and DynamoDB table names are
+  # case-sensitive, so TEAM-AppStream-RefCount-dev and -DEV are distinct tables that both
+  # fold to one alias. KMS aliases allow uppercase, so mirroring inherits the table's own
+  # uniqueness and needs no mapping to reason about.
+  name          = "alias/${var.name}"
+  target_key_id = aws_kms_key.appstream_refcount.key_id
+}
+
+# Attached separately rather than inline on aws_kms_key. Inline, the key depends on the
+# policy document, so the document cannot reference the key's own ARN and resources would
+# have to be "*" - which trips CKV_AWS_356.
+resource "aws_kms_key_policy" "appstream_refcount" {
+  key_id = aws_kms_key.appstream_refcount.id
+  policy = data.aws_iam_policy_document.appstream_refcount_kms.json
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "appstream_refcount_kms" {
+  # Without this the key would have no administrator once the policy is applied and the
+  # policy could never be changed again. AWS's policy lockout safety check also rejects a
+  # key policy that does not grant the account root kms:PutKeyPolicy. DynamoDB itself needs
+  # no service statement: it creates grants on the key on behalf of the calling principal.
+  statement {
+    sid = "Allow account administration of the key"
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+
+    actions   = ["kms:*"]
+    resources = [aws_kms_key.appstream_refcount.arn]
+  }
 }

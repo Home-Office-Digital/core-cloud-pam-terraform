@@ -49,6 +49,29 @@ thing the design exists to prevent. Row presence only tells you the pair was see
 The table `name` must match the name the state machines build from the Amplify `env`
 parameter, for example `TEAM-AppStream-RefCount-main`.
 
+## Encryption
+
+The module creates its own customer managed key, matching the pattern used by
+`cloudtrail/event_data_store` in this repo. There is no input for supplying a key: the
+table is always encrypted with the CMK created here.
+
+A CMK rather than the AWS managed `aws/dynamodb` key because `CKV_AWS_119` is active org-wide
+and has not been exempted — unlike `CKV_AWS_28`, which is on the global skip list.
+
+Two details carried over from fixing `CKV_AWS_356` in `cloudtrail/event_data_store`:
+
+- The key policy is attached with a separate `aws_kms_key_policy`, not inline on
+  `aws_kms_key`. Inline, the key depends on the policy document, so the document cannot
+  reference the key's own ARN and `resources` would have to be `"*"`.
+- The policy grants **account root** administration of the key. Without it the key would
+  have no administrator once the policy is applied and could never be changed again, and
+  AWS's policy lockout safety check rejects a key policy that does not grant root
+  `kms:PutKeyPolicy`. DynamoDB needs no service statement of its own — it creates grants on
+  the key on behalf of the calling principal.
+
+The alias is derived from the table name (`alias/team-appstream-refcount-<env>`) rather than
+fixed, so it cannot collide if the module is deployed more than once in an account.
+
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
 
@@ -69,16 +92,20 @@ No modules.
 | Name | Type |
 |------|------|
 | [aws_dynamodb_table.appstream_refcount](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table) | resource |
+| [aws_kms_alias.appstream_refcount](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
+| [aws_kms_key.appstream_refcount](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
+| [aws_kms_key_policy.appstream_refcount](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key_policy) | resource |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.appstream_refcount_kms](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_deletion_protection_enabled"></a> [deletion\_protection\_enabled](#input\_deletion\_protection\_enabled) | Whether to enable deletion protection. Removing this table while sessions are active would strand AppStream assignments | `bool` | `true` | no |
-| <a name="input_kms_key_arn"></a> [kms\_key\_arn](#input\_kms\_key\_arn) | ARN of the KMS key used to encrypt the table. Leave null to use the AWS managed aws/dynamodb key | `string` | `null` | no |
 | <a name="input_name"></a> [name](#input\_name) | Name of the DynamoDB table. Must match the name the TEAM state machines build from the Amplify env parameter, e.g. TEAM-AppStream-RefCount-main | `string` | n/a | yes |
 | <a name="input_point_in_time_recovery_enabled"></a> [point\_in\_time\_recovery\_enabled](#input\_point\_in\_time\_recovery\_enabled) | Whether to enable point-in-time recovery. The table is reconstructible by the reconciliation sweep, but losing it causes incorrect assign/unassign decisions until that sweep runs | `bool` | `true` | no |
-| <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to the table | `map(string)` | `{}` | no |
+| <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to the table and its CMK | `map(string)` | `{}` | no |
 
 ## Outputs
 

@@ -12,12 +12,6 @@ variable "name" {
   }
 }
 
-variable "kms_key_arn" {
-  description = "ARN of the KMS key used to encrypt the table. Leave null to use the AWS managed aws/dynamodb key"
-  type        = string
-  default     = null
-}
-
 variable "point_in_time_recovery_enabled" {
   description = "Whether to enable point-in-time recovery. The table is reconstructible by the reconciliation sweep, but losing it causes incorrect assign/unassign decisions until that sweep runs"
   type        = bool
@@ -31,7 +25,7 @@ variable "deletion_protection_enabled" {
 }
 
 variable "tags" {
-  description = "Tags to apply to the table"
+  description = "Tags to apply to the table and its CMK"
   type        = map(string)
   default     = {}
 }
