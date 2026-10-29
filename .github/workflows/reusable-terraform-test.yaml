@@ -36,7 +36,7 @@ jobs:
       modules: ${{ steps.discover.outputs.modules }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Discover Terraform test modules
       id: discover
@@ -94,7 +94,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v5
+      uses: actions/checkout@v7
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
@@ -154,7 +154,7 @@ jobs:
         echo "name=terraform-test-results-${module_slug}" >> "$GITHUB_OUTPUT"
 
     - name: Upload Terraform test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: ${{ steps.artifact.outputs.name }}
@@ -181,14 +181,14 @@ jobs:
     steps:
     - name: Download Terraform test artifacts
       if: needs.discover-modules.outputs.modules != '[]'
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: terraform-test-results-*
         path: terraform-test-results
         merge-multiple: true
 
     - name: Build and publish PR comment
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       env:
         MODULES_JSON: ${{ needs.discover-modules.outputs.modules }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
