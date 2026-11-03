@@ -10,17 +10,31 @@ variables {
   }
 }
 
-# apply, not plan: the SSE assertion reads the key ARN, which is computed. The overrides give
-# the mock provider values the real schemas accept.
+# File-level, so every run gets them. The mock provider would otherwise invent an
+# organization with no matching accounts and a policy document the real schema rejects.
+override_data {
+  target = data.aws_organizations_organization.this
+  values = {
+    accounts = [
+      { name = "APC-PR-Prod-WL-Account-1", id = "111111111111", status = "ACTIVE", arn = "arn:aws:organizations::000000000000:account/o-test/111111111111", email = "a@example.com" },
+      { name = "APC-PR-Prod-WL-Account-2", id = "222222222222", status = "ACTIVE", arn = "arn:aws:organizations::000000000000:account/o-test/222222222222", email = "b@example.com" },
+      { name = "Duplicated-Name", id = "333333333333", status = "ACTIVE", arn = "arn:aws:organizations::000000000000:account/o-test/333333333333", email = "c@example.com" },
+      { name = "Duplicated-Name", id = "444444444444", status = "ACTIVE", arn = "arn:aws:organizations::000000000000:account/o-test/444444444444", email = "d@example.com" },
+      { name = "Suspended-Account", id = "555555555555", status = "SUSPENDED", arn = "arn:aws:organizations::000000000000:account/o-test/555555555555", email = "e@example.com" },
+    ]
+  }
+}
+
+override_data {
+  target = data.aws_iam_policy_document.appstream_registry_kms
+  values = {
+    json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+  }
+}
+
+# apply, not plan: the SSE assertion reads the computed key ARN.
 run "design_constraints" {
   command = apply
-
-  override_data {
-    target = data.aws_iam_policy_document.appstream_registry_kms
-    values = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-    }
-  }
 
   override_resource {
     target = aws_kms_key.appstream_registry
@@ -31,17 +45,29 @@ run "design_constraints" {
   }
 
   assert {
-    condition     = aws_dynamodb_table.appstream_registry.hash_key == "accountName"
-    error_message = "Registry must be keyed on accountName, which the state machines look up by."
+    condition     = aws_dynamodb_table.appstream_registry.hash_key == "accountId"
+    error_message = "Registry must be keyed on accountId, which TEAM verifies; accountName can be client-supplied."
+  }
+
+  # Keyed by ID so renaming an account updates its item in place, rather than a create and a
+  # destroy racing against the same row.
+  assert {
+    condition     = toset(keys(aws_dynamodb_table_item.application)) == toset(["111111111111", "222222222222"])
+    error_message = "Item instances must be keyed by resolved account ID, not account name."
   }
 
   assert {
-    condition     = length(aws_dynamodb_table_item.application) == 2
-    error_message = "One item must be written per mapped account."
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).accountId.S == "111111111111"
+    error_message = "Account names must be resolved to their account ID."
   }
 
   assert {
-    condition     = jsondecode(aws_dynamodb_table_item.application["APC-PR-Prod-WL-Account-1"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).accountName.S == "APC-PR-Prod-WL-Account-1"
+    error_message = "The account name must be kept on the item for readability."
+  }
+
+  assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["222222222222"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
     error_message = "Items must carry applicationArn as a string attribute."
   }
 
@@ -69,13 +95,6 @@ run "reader_grant_is_read_only_and_dynamodb_only" {
 
   variables {
     reader_role_arns = ["arn:aws:iam::111122223333:role/cc-pam-team-terragrunt-plan-role"]
-  }
-
-  override_data {
-    target = data.aws_iam_policy_document.appstream_registry_kms
-    values = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-    }
   }
 
   override_resource {
@@ -110,18 +129,50 @@ run "reader_grant_is_read_only_and_dynamodb_only" {
   }
 }
 
+# A typo must fail the plan, not write a row that never matches.
+run "rejects_unknown_account_name" {
+  command = plan
+
+  variables {
+    applications = {
+      "APC-PR-Prod-WL-Acount-1" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    }
+  }
+
+  expect_failures = [aws_dynamodb_table_item.application]
+}
+
+# Two active accounts with one name: refuse rather than guess.
+run "rejects_ambiguous_account_name" {
+  command = plan
+
+  variables {
+    applications = {
+      "Duplicated-Name" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    }
+  }
+
+  expect_failures = [aws_dynamodb_table_item.application]
+}
+
+# A suspended account must not resolve.
+run "rejects_suspended_account" {
+  command = plan
+
+  variables {
+    applications = {
+      "Suspended-Account" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    }
+  }
+
+  expect_failures = [aws_dynamodb_table_item.application]
+}
+
 run "rejects_name_outside_convention" {
   command = plan
 
   variables {
     name = "team-appstream-registry"
-  }
-
-  override_data {
-    target = data.aws_iam_policy_document.appstream_registry_kms
-    values = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
-    }
   }
 
   expect_failures = [var.name]
@@ -134,13 +185,6 @@ run "rejects_malformed_application_arn" {
   variables {
     applications = {
       "APC-PR-Prod-WL-Account-1" = "arn:aws:sso::111122223333:application/ssoins-a/apl-b"
-    }
-  }
-
-  override_data {
-    target = data.aws_iam_policy_document.appstream_registry_kms
-    values = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
 
