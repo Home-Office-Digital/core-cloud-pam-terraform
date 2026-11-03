@@ -1,15 +1,18 @@
 # appstream_registry
 
 Maps a TEAM target account to the IAM Identity Center (AppStream) application its sessions
-are granted. The TEAM Grant and Revoke state machines look up `$.accountName`: a row means
-in scope, no row means the session proceeds as normal. Adding a tenant is a row here, not a
+are granted. The TEAM Grant and Revoke state machines look up `$.accountId`: a row means in
+scope, no row means the session proceeds as normal. Adding a tenant is a row here, not a
 change to the shared TEAM app.
 
+- **Keyed on account ID.** TEAM keeps a client-supplied `accountName` when it cannot resolve
+  one, whereas `accountId` is what eligibility and the account assignment use. Config still
+  takes account **names**; they are resolved through Organizations, and a name that matches
+  no active account, or more than one, fails the plan.
 - **Own CMK**, matching `appstream_refcount`. Roles in `reader_role_arns` (e.g. the terragrunt
   plan role) get `kms:Decrypt` in the key policy, limited to calls via DynamoDB. That grant
   lives in the key policy because the baseline IAM module drops conditions.
-- **Fails closed.** A missing table, missing row or renamed account means no AppStream; the
-  TEAM session is unaffected.
+- **Fails closed.** A missing table or row means no AppStream; the TEAM session is unaffected.
 - **Wrong-but-valid ARNs** are blocked at runtime: the state machine roles may only assign
   applications tagged `team-appstream-managed = true`.
 
@@ -25,6 +28,7 @@ change to the shared TEAM app.
 | [aws_kms_key_policy.appstream_registry](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key_policy) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_iam_policy_document.appstream_registry_kms](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_organizations_organization.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/organizations_organization) | data source |
 
 ## Inputs
 

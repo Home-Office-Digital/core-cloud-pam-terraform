@@ -2,10 +2,13 @@
 resource "aws_dynamodb_table" "appstream_registry" {
   name         = var.name
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "accountName"
+
+  # accountId, not accountName: TEAM keeps a client-supplied accountName when it cannot
+  # resolve one, whereas accountId is what eligibility and the account assignment use.
+  hash_key = "accountId"
 
   attribute {
-    name = "accountName"
+    name = "accountId"
     type = "S"
   }
 
@@ -25,6 +28,13 @@ resource "aws_dynamodb_table" "appstream_registry" {
   depends_on = [aws_kms_key_policy.appstream_registry]
 }
 
+data "aws_organizations_organization" "this" {}
+
+locals {
+  # Grouped, so a name shared by two active accounts is caught rather than silently picking one.
+  account_ids = { for a in data.aws_organizations_organization.this.accounts : a.name => a.id... if a.status == "ACTIVE" }
+}
+
 resource "aws_dynamodb_table_item" "application" {
   for_each = var.applications
 
@@ -32,9 +42,17 @@ resource "aws_dynamodb_table_item" "application" {
   hash_key   = aws_dynamodb_table.appstream_registry.hash_key
 
   item = jsonencode({
+    accountId      = { S = one(lookup(local.account_ids, each.key, [""])) }
     accountName    = { S = each.key }
     applicationArn = { S = each.value }
   })
+
+  lifecycle {
+    precondition {
+      condition     = length(lookup(local.account_ids, each.key, [])) == 1
+      error_message = "Account \"${each.key}\" must match exactly one active account in the organization."
+    }
+  }
 }
 
 resource "aws_kms_key" "appstream_registry" {
