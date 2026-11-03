@@ -56,6 +56,58 @@ run "design_constraints" {
     condition     = aws_kms_alias.appstream_registry.name == "alias/TEAM-AppStream-Registry-test"
     error_message = "Alias must mirror the table name."
   }
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.appstream_registry_kms.statement : s if s.sid == "Allow readers to decrypt via DynamoDB only"]) == 0
+    error_message = "No reader statement may be rendered when reader_role_arns is empty."
+  }
+}
+
+# Asserts on the configured statement, not the rendered JSON, which is overridden above.
+run "reader_grant_is_read_only_and_dynamodb_only" {
+  command = apply
+
+  variables {
+    reader_role_arns = ["arn:aws:iam::111122223333:role/cc-pam-team-terragrunt-plan-role"]
+  }
+
+  override_data {
+    target = data.aws_iam_policy_document.appstream_registry_kms
+    values = {
+      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+    }
+  }
+
+  override_resource {
+    target = aws_kms_key.appstream_registry
+    values = {
+      arn    = "arn:aws:kms:eu-west-2:111122223333:key/test-key-id"
+      key_id = "test-key-id"
+    }
+  }
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.appstream_registry_kms.statement : s if s.sid == "Allow readers to decrypt via DynamoDB only"]) == 1
+    error_message = "Exactly one reader statement must be rendered when reader_role_arns is set."
+  }
+
+  assert {
+    condition     = one(one([for s in data.aws_iam_policy_document.appstream_registry_kms.statement : s if s.sid == "Allow readers to decrypt via DynamoDB only"]).principals).identifiers == toset(["arn:aws:iam::111122223333:role/cc-pam-team-terragrunt-plan-role"])
+    error_message = "Reader statement must grant exactly the configured roles."
+  }
+
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.appstream_registry_kms.statement : s if s.sid == "Allow readers to decrypt via DynamoDB only"]).actions) == toset(["kms:Decrypt", "kms:DescribeKey"])
+    error_message = "Reader statement must be read-only: kms:Decrypt and kms:DescribeKey only."
+  }
+
+  assert {
+    condition = anytrue([
+      for c in one([for s in data.aws_iam_policy_document.appstream_registry_kms.statement : s if s.sid == "Allow readers to decrypt via DynamoDB only"]).condition :
+      c.variable == "kms:ViaService" && c.test == "StringLike" && toset(c.values) == toset(["dynamodb.*.amazonaws.com"])
+    ])
+    error_message = "Reader statement must be limited to calls via DynamoDB with kms:ViaService."
+  }
 }
 
 run "rejects_name_outside_convention" {
