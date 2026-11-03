@@ -49,13 +49,25 @@ run "design_constraints" {
     error_message = "Registry must be keyed on accountId, which TEAM verifies; accountName can be client-supplied."
   }
 
+  # Keyed by ID so renaming an account updates its item in place, rather than a create and a
+  # destroy racing against the same row.
   assert {
-    condition     = jsondecode(aws_dynamodb_table_item.application["APC-PR-Prod-WL-Account-1"].item).accountId.S == "111111111111"
+    condition     = toset(keys(aws_dynamodb_table_item.application)) == toset(["111111111111", "222222222222"])
+    error_message = "Item instances must be keyed by resolved account ID, not account name."
+  }
+
+  assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).accountId.S == "111111111111"
     error_message = "Account names must be resolved to their account ID."
   }
 
   assert {
-    condition     = jsondecode(aws_dynamodb_table_item.application["APC-PR-Prod-WL-Account-2"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).accountName.S == "APC-PR-Prod-WL-Account-1"
+    error_message = "The account name must be kept on the item for readability."
+  }
+
+  assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["222222222222"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
     error_message = "Items must carry applicationArn as a string attribute."
   }
 
