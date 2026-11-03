@@ -19,6 +19,12 @@ variable "applications" {
   }
 }
 
+variable "reader_role_arns" {
+  description = "IAM role ARNs allowed to decrypt the table via DynamoDB without an IAM grant, e.g. the terragrunt plan role. Must already exist."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to the table"
   type        = map(string)
