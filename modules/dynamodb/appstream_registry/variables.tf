@@ -13,8 +13,9 @@ variable "applications" {
   type        = map(string)
 
   validation {
-    condition     = alltrue([for arn in values(var.applications) : can(regex("^arn:aws:sso::[0-9]{12}:application/ssoins-[0-9a-f]+/apl-[0-9a-f]+$", arn))])
-    error_message = "Every value must be an IdC application ARN."
+    # Mirrors the ApplicationArn pattern in the CreateApplicationAssignment API reference.
+    condition     = alltrue([for arn in values(var.applications) : can(regex("^arn:aws(-[a-z]{1,5}){0,3}:sso::[0-9]{12}:application/(sso)?ins-[a-zA-Z0-9.-]{16}/apl-[a-zA-Z0-9]{16}$", arn))])
+    error_message = "Every value must be an IdC application ARN, with 16-character instance and application IDs."
   }
 }
 

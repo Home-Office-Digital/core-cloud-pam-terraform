@@ -43,8 +43,9 @@ run "rejects_malformed_application_arn" {
   command = plan
 
   variables {
+    # Well-shaped but with IDs shorter than the 16 characters AWS requires.
     applications = {
-      "APC-PR-Prod-WL-Account-1" = "PAM Live"
+      "APC-PR-Prod-WL-Account-1" = "arn:aws:sso::111122223333:application/ssoins-a/apl-b"
     }
   }
 
