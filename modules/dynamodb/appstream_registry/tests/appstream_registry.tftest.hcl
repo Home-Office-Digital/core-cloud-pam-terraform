@@ -77,7 +77,7 @@ run "design_constraints" {
     error_message = "Table must be encrypted with the module's own CMK."
   }
 
-  # The Grant state machine's KMS condition matches on this alias.
+  # The controller finds the key by this alias.
   assert {
     condition     = aws_kms_alias.appstream_registry.name == "alias/TEAM-AppStream-Registry-test"
     error_message = "Alias must mirror the table name."

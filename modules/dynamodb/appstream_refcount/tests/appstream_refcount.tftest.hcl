@@ -71,8 +71,8 @@ run "design_constraints" {
   }
 }
 
-# The table name is the only coupling between this module and the state machines in
-# core-cloud-pam-team-app, and it is a convention rather than a reference. A mismatch fails
+# The table name is the only coupling between this module and the AppStream controller,
+# and it is a convention rather than a reference. A mismatch fails
 # silently: the UpdateItem calls would target a table that does not exist, so every set
 # would look empty.
 run "rejects_name_outside_convention" {

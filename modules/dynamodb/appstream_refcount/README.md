@@ -8,18 +8,16 @@ principal type)` — it has no account, session or request dimension. Two overla
 sessions for the same user therefore share a single assignment, so deleting it when the
 first session ends would cut off the second, still-active session.
 
-The TEAM Grant and Revoke state machines keep the set of active request ids for each
-`(application, principal)` in this table, and only remove the assignment once that set is
-empty:
+The AppStream controller (`stepfunctions/appstream_controller`) is the only writer. For each
+`(application, principal)` it recomputes the set of active request ids from TEAM's own
+executions, writes it here, and only removes the assignment once the set is empty. It also
+records:
 
-| State machine | Operation |
+| Attribute | Meaning |
 |---|---|
-| Grant | `UpdateItem` `ADD activeRequestIds :id` → `createApplicationAssignment` |
-| Revoke | `UpdateItem` `DELETE activeRequestIds :id` with `ReturnValues: UPDATED_NEW` → `Choice` on whether the attribute is now absent → `deleteApplicationAssignment` |
-
-DynamoDB removes a set attribute entirely when its last element is deleted, so "the set is
-empty" is expressible in Step Functions as an `IsPresent: false` check — no Lambda and no
-arithmetic.
+| `managed` | `owned` if the controller created the assignment, `preexisting` if it was already there. Only `owned` assignments are ever removed |
+| `rev` | Optimistic lock. Every write is conditional on the value read, so concurrent runs cannot overwrite each other |
+| `username` | Lets the sweep re-check a principal with no in-progress request |
 
 ## A key-only row is not a held assignment
 
@@ -37,17 +35,16 @@ thing the design exists to prevent. Row presence only tells you the pair was see
 ## Two deliberate omissions
 
 - **`activeRequestIds` is not declared** as an attribute. DynamoDB only requires key
-  attributes in the schema. It must remain a **String Set**, not a List, because atomic
-  `ADD`/`DELETE` update expressions are only available on sets; a List would force a
-  read-modify-write and reintroduce the race this table exists to remove.
+  attributes in the schema. Keep it a **String Set**: an empty set is not storable, so the
+  attribute is absent exactly when no session is active.
 - **No TTL.** Because empty rows persist as tombstones, a TTL looks like a tidy way to reap
   them. But a TTL timestamp written at grant time can fire while the set is still non-empty —
   an extended session, or a second overlapping session — deleting a live counter and leaving
   the next revoke to see an empty set and drop an assignment another session is still using.
   Tombstone count is bounded by distinct `(application, principal)` pairs, so leave them.
 
-The table `name` must match the name the state machines build from the Amplify `env`
-parameter, for example `TEAM-AppStream-RefCount-main`.
+The table `name` must match the name the controller derives from its `env`, for example
+`TEAM-AppStream-RefCount-main`.
 
 ## Encryption
 
@@ -103,7 +100,7 @@ No modules.
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_deletion_protection_enabled"></a> [deletion\_protection\_enabled](#input\_deletion\_protection\_enabled) | Whether to enable deletion protection. Removing this table while sessions are active would strand AppStream assignments | `bool` | `true` | no |
-| <a name="input_name"></a> [name](#input\_name) | Name of the DynamoDB table. Must match the name the TEAM state machines build from the Amplify env parameter, e.g. TEAM-AppStream-RefCount-main | `string` | n/a | yes |
+| <a name="input_name"></a> [name](#input\_name) | Name of the DynamoDB table. Must match the name the AppStream controller derives from its env, e.g. TEAM-AppStream-RefCount-main | `string` | n/a | yes |
 | <a name="input_point_in_time_recovery_enabled"></a> [point\_in\_time\_recovery\_enabled](#input\_point\_in\_time\_recovery\_enabled) | Whether to enable point-in-time recovery. The table is reconstructible by the reconciliation sweep, but losing it causes incorrect assign/unassign decisions until that sweep runs | `bool` | `true` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to the table and its CMK | `map(string)` | `{}` | no |
 

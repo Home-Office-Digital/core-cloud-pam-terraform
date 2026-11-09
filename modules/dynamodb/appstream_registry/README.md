@@ -1,9 +1,9 @@
 # appstream_registry
 
 Maps a TEAM target account to the IAM Identity Center (AppStream) application its sessions
-are granted. The TEAM Grant and Revoke state machines look up `$.accountId`: a row means in
-scope, no row means the session proceeds as normal. Adding a tenant is a row here, not a
-change to the shared TEAM app.
+are granted. The AppStream controller (`stepfunctions/appstream_controller`) looks up the
+session's `accountId`: a row means in scope, no row means nothing happens. Adding a tenant is
+a row here, not a change to the shared TEAM app.
 
 - **Keyed on account ID.** TEAM keeps a client-supplied `accountName` when it cannot resolve
   one, whereas `accountId` is what eligibility and the account assignment use. Config still
@@ -13,7 +13,7 @@ change to the shared TEAM app.
   plan role) get `kms:Decrypt` in the key policy, limited to calls via DynamoDB. That grant
   lives in the key policy because the baseline IAM module drops conditions.
 - **Fails closed.** A missing table or row means no AppStream; the TEAM session is unaffected.
-- **Wrong-but-valid ARNs** are blocked at runtime: the state machine roles may only assign
+- **Wrong-but-valid ARNs** are blocked at runtime: the controller role may only assign
   applications tagged `team-appstream-managed = true`.
 
 <!-- BEGIN_TF_DOCS -->
@@ -35,7 +35,7 @@ change to the shared TEAM app.
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_applications"></a> [applications](#input\_applications) | Map of TEAM account name to the IdC application ARN its sessions are granted | `map(string)` | n/a | yes |
-| <a name="input_name"></a> [name](#input\_name) | Table name. Must match what the TEAM state machines build from the Amplify env, e.g. TEAM-AppStream-Registry-main | `string` | n/a | yes |
+| <a name="input_name"></a> [name](#input\_name) | Table name. Must match the name the AppStream controller derives from its env, e.g. TEAM-AppStream-Registry-main | `string` | n/a | yes |
 | <a name="input_reader_role_arns"></a> [reader\_role\_arns](#input\_reader\_role\_arns) | IAM role ARNs allowed to decrypt the table via DynamoDB without an IAM grant, e.g. the terragrunt plan role. Must already exist. | `list(string)` | `[]` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to the table | `map(string)` | `{}` | no |
 
