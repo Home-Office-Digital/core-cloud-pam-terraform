@@ -57,12 +57,6 @@ variable "alarm_actions" {
   default     = []
 }
 
-variable "log_retention_days" {
-  description = "Retention for the execution log group"
-  type        = number
-  default     = 365
-}
-
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

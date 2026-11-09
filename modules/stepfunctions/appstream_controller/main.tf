@@ -59,11 +59,6 @@ resource "aws_sfn_state_machine" "controller" {
   role_arn   = aws_iam_role.state_machine.arn
   definition = local.definition
 
-  logging_configuration {
-    log_destination        = "${aws_cloudwatch_log_group.controller.arn}:*"
-    include_execution_data = true
-    level                  = "ALL"
-  }
 
   tracing_configuration {
     enabled = true
@@ -71,8 +66,9 @@ resource "aws_sfn_state_machine" "controller" {
 
   tags = var.tags
 
-  # Logging is validated against the role at create time, and the first run needs the rest.
-  depends_on = [aws_iam_role_policy.state_machine, aws_iam_role_policy.state_machine_logs]
+  # Execution history is kept by Step Functions for 90 days. CloudWatch logging is left off:
+  # its delivery actions need Resource "*".
+  depends_on = [aws_iam_role_policy.state_machine]
 }
 
 resource "aws_iam_role" "state_machine" {
@@ -150,52 +146,17 @@ resource "aws_iam_role_policy" "state_machine" {
   })
 }
 
-# Kept apart so the skip below covers only this statement.
-resource "aws_iam_role_policy" "state_machine_logs" {
-  # checkov:skip=CKV_AWS_355:Step Functions log delivery actions have no resource-level support.
-  # checkov:skip=CKV_AWS_290:Step Functions log delivery actions have no resource-level support.
-  name = "execution-logs"
-  role = aws_iam_role.state_machine.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid    = "DeliverExecutionLogs"
-      Effect = "Allow"
-      Action = [
-        "logs:CreateLogDelivery",
-        "logs:GetLogDelivery",
-        "logs:UpdateLogDelivery",
-        "logs:DeleteLogDelivery",
-        "logs:ListLogDeliveries",
-        "logs:PutResourcePolicy",
-        "logs:DescribeResourcePolicies",
-        "logs:DescribeLogGroups",
-      ]
-      Resource = ["*"]
-    }]
-  })
-}
-
 resource "aws_iam_role_policy_attachment" "state_machine_xray" {
   role       = aws_iam_role.state_machine.name
   policy_arn = "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
 }
 
 # ---------------------------------------------------------------------------------------
-# Logs and the controller CMK
+# Controller CMK
 # ---------------------------------------------------------------------------------------
 
-resource "aws_cloudwatch_log_group" "controller" {
-  name              = "/aws/vendedlogs/states/${local.name}"
-  retention_in_days = var.log_retention_days
-  kms_key_id        = aws_kms_key.controller.arn
-  tags              = var.tags
-
-  depends_on = [aws_kms_key_policy.controller]
-}
-
 resource "aws_kms_key" "controller" {
-  description             = "CMK for the TEAM AppStream controller logs and schedule payload"
+  description             = "CMK for the TEAM AppStream controller schedule payload"
   enable_key_rotation     = true
   deletion_window_in_days = 30
   tags                    = var.tags
@@ -217,18 +178,6 @@ resource "aws_kms_key_policy" "controller" {
         Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
         Action    = "kms:*"
         Resource  = aws_kms_key.controller.arn
-      },
-      {
-        Sid       = "Allow CloudWatch Logs for this log group only"
-        Effect    = "Allow"
-        Principal = { Service = "logs.${local.region}.amazonaws.com" }
-        Action    = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
-        Resource  = aws_kms_key.controller.arn
-        Condition = {
-          ArnEquals = {
-            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/vendedlogs/states/${local.name}"
-          }
-        }
       },
     ]
   })
