@@ -21,6 +21,9 @@ EventBridge Scheduler (sweep) ────┤
   active only if its Schedule run started a Grant run that is RUNNING and in its session
   `Wait`, with no early-revoke run named after the request. `userId` and `accountId` come
   from the Grant run input.
+- **Matched on the IdC user id.** Usernames can be renamed or reused, so they only find
+  candidates. Once a target's user id is known, a session counts only if its Grant run has
+  that id, and the ledger's ids are re-checked even when the username has changed.
 - **Recomputed, not counted.** Every run works out the full set of active sessions for the
   user and application, so delayed, duplicated or out-of-order events cannot leave the
   assignment wrong. Candidates are the user's in-progress requests (every page), the ids

@@ -190,7 +190,7 @@
             "Items": "{% $append([], $distinct($append($append($candidates, $hintIds), $exists($target.triggerId) ? [$target.triggerId] : []))) %}",
             "ItemSelector": {
               "requestId": "{% $states.context.Map.Item.Value %}",
-              "userId": "{% $exists($target.userId) ? $target.userId : '' %}",
+              "userId": "{% $principalId %}",
               "username": "{% $target.username %}",
               "applicationArn": "{% $target.applicationArn %}"
             },
@@ -255,10 +255,10 @@
                 },
                 "V: Grant matches?": {
                   "Type": "Choice",
-                  "Comment": "Positive match only: any missing field compares false, so it fails closed.",
+                  "Comment": "Positive match only, so a missing field fails closed. The IdC user id decides once known: usernames can be renamed or reused.",
                   "Choices": [
                     {
-                      "Condition": "{% $status = 'RUNNING' and $sessionGrant.username = $item.username and ($item.userId = '' or $sessionGrant.userId = $item.userId) %}",
+                      "Condition": "{% $status = 'RUNNING' and ($item.userId != '' ? $sessionGrant.userId = $item.userId : $sessionGrant.username = $item.username) %}",
                       "Next": "V: Grant position"
                     }
                   ],
@@ -354,7 +354,7 @@
               }
             },
             "Assign": {
-              "activeIds": "{% $append([], $states.result[active = true].requestId) %}",
+              "activeIds": "{% ( $u := $append([], $states.result[active = true].userId); $p := $principalId != '' ? $principalId : ($count($u) > 0 ? $u[0] : ''); $append([], $states.result[active = true and userId = $p].requestId) ) %}",
               "principalId": "{% ( $u := $append([], $states.result[active = true].userId); $principalId != '' ? $principalId : ($count($u) > 0 ? $u[0] : '') ) %}"
             },
             "Next": "R: principal known?"
