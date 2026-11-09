@@ -117,6 +117,11 @@ run "safe_by_default" {
     condition     = aws_scheduler_schedule.sweep.kms_key_arn == aws_kms_key.controller.arn
     error_message = "The schedule payload must use the module's CMK."
   }
+
+  assert {
+    condition     = length(jsondecode(aws_kms_key_policy.controller.policy).Statement) == 1
+    error_message = "No reader statement may be rendered when reader_role_arns is empty."
+  }
 }
 
 # Least privilege, asserted on the rendered policies.
@@ -191,6 +196,24 @@ run "enabled" {
   assert {
     condition     = jsondecode(aws_scheduler_schedule.sweep.target[0].input) == { mode = "sweep" }
     error_message = "The schedule must start the sweep."
+  }
+}
+
+run "plan_role_can_read_the_schedule" {
+  command = apply
+
+  variables {
+    reader_role_arns = ["arn:aws:iam::111122223333:role/cc-pam-team-terragrunt-plan-role"]
+  }
+
+  assert {
+    condition     = one([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow readers to decrypt the schedule payload"]).Principal.AWS == ["arn:aws:iam::111122223333:role/cc-pam-team-terragrunt-plan-role"]
+    error_message = "Reader roles must be granted on the controller key."
+  }
+
+  assert {
+    condition     = one([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow readers to decrypt the schedule payload"]).Action == ["kms:Decrypt", "kms:DescribeKey"]
+    error_message = "Readers may only decrypt and describe the key."
   }
 }
 

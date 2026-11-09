@@ -171,7 +171,7 @@ resource "aws_kms_key_policy" "controller" {
   key_id = aws_kms_key.controller.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Sid       = "Allow account administration of the key"
         Effect    = "Allow"
@@ -179,7 +179,16 @@ resource "aws_kms_key_policy" "controller" {
         Action    = "kms:*"
         Resource  = aws_kms_key.controller.arn
       },
-    ]
+      ],
+      # Reading the schedule decrypts its payload with the caller's credentials. Granted here
+      # because the baseline IAM module drops conditions and the key ARN is not known there.
+      length(var.reader_role_arns) > 0 ? [{
+        Sid       = "Allow readers to decrypt the schedule payload"
+        Effect    = "Allow"
+        Principal = { AWS = var.reader_role_arns }
+        Action    = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource  = aws_kms_key.controller.arn
+    }] : [])
   })
 }
 

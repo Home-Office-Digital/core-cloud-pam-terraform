@@ -84,6 +84,7 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 | <a name="input_requests_table_name"></a> [requests\_table\_name](#input\_requests\_table\_name) | TEAM requests table, e.g. requests-<appsync api id>-main. Its stream drives the pipe. | `string` | n/a | yes |
 | <a name="input_sweep_enabled"></a> [sweep\_enabled](#input\_sweep\_enabled) | Enable the scheduled sweep | `bool` | `false` | no |
 | <a name="input_sweep_schedule"></a> [sweep\_schedule](#input\_sweep\_schedule) | Schedule expression for the sweep | `string` | `"rate(5 minutes)"` | no |
+| <a name="input_reader_role_arns"></a> [reader\_role\_arns](#input\_reader\_role\_arns) | IAM role ARNs allowed to decrypt the schedule payload, e.g. the terragrunt plan role, which reads it on refresh. Must already exist. | `list(string)` | `[]` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to all resources | `map(string)` | `{}` | no |
 | <a name="input_team_env"></a> [team\_env](#input\_team\_env) | Amplify env of the TEAM app, used to find its state machines, e.g. main for TEAM-Grant-SM-main | `string` | `"main"` | no |
 

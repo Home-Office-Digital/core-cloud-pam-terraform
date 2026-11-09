@@ -57,6 +57,12 @@ variable "alarm_actions" {
   default     = []
 }
 
+variable "reader_role_arns" {
+  description = "IAM role ARNs allowed to decrypt the schedule payload, e.g. the terragrunt plan role, which reads it on refresh. Must already exist."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
