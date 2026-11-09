@@ -25,11 +25,13 @@ EventBridge Scheduler (sweep) ────┤
   user and application, so delayed, duplicated or out-of-order events cannot leave the
   assignment wrong. Candidates are the user's in-progress requests (every page), the ids
   already in the ledger and the triggering request, so editing a live request's status
-  cannot drop it. A delete only happens after a second full check 5 seconds later.
+  cannot drop it. A delete needs two consecutive full checks 5 seconds apart, then a lock on
+  the ledger row; any write since the check (for example a new session) cancels it.
 - **Only removes what it created.** An assignment that already existed is recorded as
   `preexisting` and never deleted. Ownership is written before a create, written again after
-  it, and released only after a delete; ledger writes are conditional on `rev`. A create that
-  conflicts is treated as ours, so the failure mode is removing access, never leaving it.
+  it, and released only after a delete. The ledger row is read consistently before
+  verifying, and every write is conditional on that `rev`. A create that conflicts is
+  treated as ours, so the failure mode is removing access, never leaving it.
 - **Fails closed.** A missing execution, registry row or matching user means no AppStream.
   A failure never affects the TEAM session.
 - **Least privilege.** Read-only on TEAM's executions and the `byStatus` index of the

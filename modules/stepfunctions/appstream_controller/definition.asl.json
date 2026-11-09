@@ -128,7 +128,7 @@
     "Sweep: ledger": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
-      "Arguments": "{% $merge([{'TableName': '${ledger_table}', 'ProjectionExpression': 'applicationArn, principalId, #u, managed, activeRequestIds', 'ExpressionAttributeNames': {'#u': 'username'}}, $ledgerKey != null ? {'ExclusiveStartKey': $ledgerKey} : {}]) %}",
+      "Arguments": "{% $merge([{'TableName': '${ledger_table}', 'ProjectionExpression': 'applicationArn, principalId, #u, managed, activeRequestIds', 'FilterExpression': 'attribute_exists(managed) OR attribute_exists(activeRequestIds)', 'ExpressionAttributeNames': {'#u': 'username'}}, $ledgerKey != null ? {'ExclusiveStartKey': $ledgerKey} : {}]) %}",
       "Assign": {
         "ledgerItems": "{% $append($ledgerItems, $states.result.Items) %}",
         "ledgerKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
@@ -139,7 +139,7 @@
       "Type": "Pass",
       "Comment": "One target per user and application: every in-progress candidate on a registry account, plus every ledger row we manage. Ledger rows come first so the target keeps the known principal id.",
       "Assign": {
-        "targets": "{% ( $reg := $merge($append([{}], $registryItems.{ accountId.S: applicationArn.S })); $fromLedger := $ledgerItems[managed.S = 'owned' or $exists(activeRequestIds)].{ 'username': username.S, 'userId': principalId.S, 'applicationArn': applicationArn.S }; $fromRequests := $rows[$exists($lookup($reg, accountId.S))].{ 'username': username.S, 'userId': '', 'applicationArn': $lookup($reg, accountId.S) }; $all := $append($append([], $fromLedger), $fromRequests); $keys := $distinct($all.(username & '|' & applicationArn)); $append([], $keys.( $k := $; $all[(username & '|' & applicationArn) = $k][0] )) ) %}"
+        "targets": "{% ( $reg := $merge($append([{}], $registryItems.{ accountId.S: applicationArn.S })); $fromLedger := $ledgerItems[managed.S = 'owned' or $exists(activeRequestIds)].{ 'username': username.S, 'userId': principalId.S, 'applicationArn': applicationArn.S }; $fromRequests := $rows[$exists($lookup($reg, accountId.S))].{ 'username': username.S, 'userId': '', 'applicationArn': $lookup($reg, accountId.S) }; $all := $append($append([], $fromLedger), $fromRequests); $keys := $distinct($all.(username & '|' & applicationArn)); $append([], $keys.( $k := $; $t := $all[(username & '|' & applicationArn) = $k][0]; $merge([$t, { 'candidateIds': $append([], $rows[username.S = $t.username and $lookup($reg, accountId.S) = $t.applicationArn].id.S) }]) )) ) %}"
       },
       "Next": "Reconcile"
     },
@@ -165,8 +165,12 @@
               "runDryRun": "{% $states.input.dryRun %}",
               "principalId": "{% $exists($states.input.target.userId) ? $states.input.target.userId : '' %}",
               "hintIds": [],
-              "candidates": [],
-              "candidatesKey": null
+              "candidates": "{% $exists($states.input.target.candidateIds) ? $states.input.target.candidateIds : [] %}",
+              "candidatesKey": null,
+              "managed": "",
+              "rev": 0,
+              "pendingDelete": false,
+              "ledgerRead": false
             },
             "Next": "R: principal known for hint?"
           },
@@ -351,17 +355,21 @@
             },
             "Assign": {
               "activeIds": "{% $append([], $states.result[active = true].requestId) %}",
-              "principalId": "{% ( $u := $append([], $states.result[active = true].userId); $exists($target.userId) and $target.userId != '' ? $target.userId : ($count($u) > 0 ? $u[0] : '') ) %}"
+              "principalId": "{% ( $u := $append([], $states.result[active = true].userId); $principalId != '' ? $principalId : ($count($u) > 0 ? $u[0] : '') ) %}"
             },
             "Next": "R: principal known?"
           },
           "R: principal known?": {
             "Type": "Choice",
-            "Comment": "No active session and no ledger row: nothing of ours to manage.",
+            "Comment": "No principal: nothing of ours to manage. A newly discovered one goes round once more, ledger first.",
             "Choices": [
               {
+                "Condition": "{% $principalId != '' and $ledgerRead %}",
+                "Next": "R: assignment"
+              },
+              {
                 "Condition": "{% $principalId != '' %}",
-                "Next": "R: ledger"
+                "Next": "R: discovered principal"
               }
             ],
             "Default": "R: nothing to manage"
@@ -370,27 +378,6 @@
             "Type": "Pass",
             "Output": "{% { 'applicationArn': $target.applicationArn, 'username': $target.username, 'action': 'none' } %}",
             "End": true
-          },
-          "R: ledger": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::dynamodb:getItem",
-            "Arguments": {
-              "TableName": "${ledger_table}",
-              "Key": {
-                "applicationArn": {
-                  "S": "{% $target.applicationArn %}"
-                },
-                "principalId": {
-                  "S": "{% $principalId %}"
-                }
-              }
-            },
-            "Assign": {
-              "managed": "{% $exists($states.result.Item.managed.S) ? $states.result.Item.managed.S : '' %}",
-              "rev": "{% $exists($states.result.Item.rev.N) ? $number($states.result.Item.rev.N) : 0 %}"
-            },
-            "Next": "R: assignment",
-            "Comment": "rev is an optimistic lock: every write below succeeds only if nobody wrote since this read."
           },
           "R: assignment": {
             "Type": "Task",
@@ -422,7 +409,7 @@
             "Assign": {
               "action": "{% $count($activeIds) > 0 ? ($assigned ? ($managed = 'owned' ? 'keep-owned' : 'keep-preexisting') : 'create') : ($managed = 'owned' ? 'delete' : ($managed = 'preexisting' ? 'clear-preexisting' : 'none')) %}"
             },
-            "Next": "R: dry run?"
+            "Next": "R: track delete"
           },
           "R: dry run?": {
             "Type": "Choice",
@@ -438,7 +425,7 @@
             "Type": "Choice",
             "Choices": [
               {
-                "Condition": "{% $action = 'delete' and $pass < 2 %}",
+                "Condition": "{% $action = 'delete' and $pendingDelete = false %}",
                 "Next": "R: confirm before delete"
               },
               {
@@ -455,7 +442,7 @@
               },
               {
                 "Condition": "{% $action = 'delete' %}",
-                "Next": "R: delete"
+                "Next": "R: lock for delete"
               },
               {
                 "Condition": "{% $action = 'clear-preexisting' %}",
@@ -704,14 +691,17 @@
                 ],
                 "Next": "R: again?"
               }
-            ]
+            ],
+            "Assign": {
+              "pendingDelete": false
+            }
           },
           "R: again?": {
             "Type": "Choice",
             "Comment": "Verify everything again after a create, a delete, a conflict or a lost lock.",
             "Choices": [
               {
-                "Condition": "{% $pass < 4 %}",
+                "Condition": "{% $pass < 5 %}",
                 "Next": "R: second pass"
               }
             ],
@@ -723,7 +713,8 @@
               "pass": "{% $pass + 1 %}",
               "candidates": [],
               "candidatesKey": null,
-              "hintIds": []
+              "hintIds": [],
+              "ledgerRead": false
             },
             "Next": "R: principal known for hint?"
           },
@@ -771,33 +762,14 @@
           },
           "R: principal known for hint?": {
             "Type": "Choice",
-            "Comment": "Ids already in the ledger are re-verified too, so editing a live request's status cannot drop it.",
+            "Comment": "With a known principal, read the ledger first: its ids are re-verified too, so an edited status cannot drop a live session.",
             "Choices": [
               {
                 "Condition": "{% $principalId != '' %}",
-                "Next": "R: ledger hint"
+                "Next": "R: ledger"
               }
             ],
-            "Default": "R: candidates"
-          },
-          "R: ledger hint": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::dynamodb:getItem",
-            "Arguments": {
-              "TableName": "${ledger_table}",
-              "Key": {
-                "applicationArn": {
-                  "S": "{% $target.applicationArn %}"
-                },
-                "principalId": {
-                  "S": "{% $principalId %}"
-                }
-              }
-            },
-            "Assign": {
-              "hintIds": "{% $append([], $states.result.Item.activeRequestIds.SS) %}"
-            },
-            "Next": "R: candidates"
+            "Default": "R: query?"
           },
           "R: more candidates?": {
             "Type": "Choice",
@@ -810,10 +782,11 @@
             "Default": "R: verify"
           },
           "R: confirm before delete": {
-            "Type": "Wait",
-            "Comment": "Never remove access on a single look: wait, then verify everything again.",
-            "Seconds": 5,
-            "Next": "R: second pass"
+            "Type": "Pass",
+            "Assign": {
+              "pendingDelete": true
+            },
+            "Next": "R: confirm wait"
           },
           "R: confirm owned": {
             "Type": "Task",
@@ -859,6 +832,103 @@
               }
             ],
             "Next": "R: again?"
+          },
+          "R: ledger": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Comment": "Read before verifying, consistently, so every conditional write below is against what this pass saw.",
+            "Arguments": {
+              "TableName": "${ledger_table}",
+              "Key": {
+                "applicationArn": {
+                  "S": "{% $target.applicationArn %}"
+                },
+                "principalId": {
+                  "S": "{% $principalId %}"
+                }
+              },
+              "ConsistentRead": true
+            },
+            "Assign": {
+              "hintIds": "{% $append([], $states.result.Item.activeRequestIds.SS) %}",
+              "managed": "{% $exists($states.result.Item.managed.S) ? $states.result.Item.managed.S : '' %}",
+              "rev": "{% $exists($states.result.Item.rev.N) ? $number($states.result.Item.rev.N) : 0 %}",
+              "ledgerRead": true
+            },
+            "Next": "R: query?"
+          },
+          "R: discovered principal": {
+            "Type": "Pass",
+            "Assign": {
+              "candidatesKey": null
+            },
+            "Next": "R: ledger"
+          },
+          "R: track delete": {
+            "Type": "Pass",
+            "Comment": "A delete needs two consecutive passes that both decide delete.",
+            "Assign": {
+              "pendingDelete": "{% $action = 'delete' ? $pendingDelete : false %}"
+            },
+            "Next": "R: dry run?"
+          },
+          "R: confirm wait": {
+            "Type": "Wait",
+            "Comment": "Never remove access on a single look: wait, then verify everything again.",
+            "Seconds": 5,
+            "Next": "R: second pass"
+          },
+          "R: lock for delete": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Comment": "If any run wrote the row since this pass read it (for example a new session), the lock fails and nothing is deleted.",
+            "Arguments": {
+              "TableName": "${ledger_table}",
+              "Key": {
+                "applicationArn": {
+                  "S": "{% $target.applicationArn %}"
+                },
+                "principalId": {
+                  "S": "{% $principalId %}"
+                }
+              },
+              "UpdateExpression": "SET updatedAt = :t, rev = :next",
+              "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev",
+              "ExpressionAttributeValues": {
+                ":t": {
+                  "S": "{% $now() %}"
+                },
+                ":rev": {
+                  "N": "{% $string($rev) %}"
+                },
+                ":next": {
+                  "N": "{% $string($rev + 1) %}"
+                }
+              }
+            },
+            "Assign": {
+              "rev": "{% $rev + 1 %}"
+            },
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "DynamoDB.ConditionalCheckFailedException"
+                ],
+                "Next": "R: again?"
+              }
+            ],
+            "Next": "R: delete"
+          },
+          "R: query?": {
+            "Type": "Choice",
+            "Comment": "The sweep's first pass reuses its own query. Every later pass, and every event, queries afresh.",
+            "Choices": [
+              {
+                "Condition": "{% $pass = 1 and $exists($target.candidateIds) %}",
+                "Next": "R: verify"
+              }
+            ],
+            "Default": "R: candidates"
           }
         }
       },
