@@ -7,7 +7,13 @@
     "Start": {
       "Type": "Pass",
       "Assign": {
-        "dryRun": ${dry_run}
+        "dryRun": ${dry_run},
+        "rows": [],
+        "rowsKey": null,
+        "registryItems": [],
+        "registryKey": null,
+        "ledgerItems": [],
+        "ledgerKey": null
       },
       "Next": "Mode?"
     },
@@ -94,7 +100,7 @@
         }
       },
       "Assign": {
-        "targets": "{% $exists($states.result.Item) and $exists($grant.userId) ? [{ 'userId': $grant.userId, 'username': $grant.username, 'applicationArn': $states.result.Item.applicationArn.S }] : [] %}"
+        "targets": "{% $exists($states.result.Item) and $exists($grant.userId) ? [{ 'userId': $grant.userId, 'username': $grant.username, 'applicationArn': $states.result.Item.applicationArn.S, 'triggerId': $requestId }] : [] %}"
       },
       "Next": "Reconcile"
     },
@@ -102,45 +108,32 @@
       "Type": "Task",
       "Comment": "Candidates only. Every one is verified against TEAM's executions before it counts.",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-      "Arguments": {
-        "TableName": "${requests_table}",
-        "IndexName": "byStatus",
-        "KeyConditionExpression": "#s = :s",
-        "ExpressionAttributeNames": {
-          "#s": "status"
-        },
-        "ExpressionAttributeValues": {
-          ":s": {
-            "S": "in progress"
-          }
-        }
-      },
+      "Arguments": "{% $merge([{'TableName': '${requests_table}', 'IndexName': 'byStatus', 'KeyConditionExpression': '#s = :s', 'ProjectionExpression': '#i, #u, #a', 'ExpressionAttributeNames': {'#s': 'status', '#i': 'id', '#u': 'username', '#a': 'accountId'}, 'ExpressionAttributeValues': {':s': {'S': 'in progress'}}}, $rowsKey != null ? {'ExclusiveStartKey': $rowsKey} : {}]) %}",
       "Assign": {
-        "rows": "{% $append([], $states.result.Items) %}"
+        "rows": "{% $append($rows, $states.result.Items) %}",
+        "rowsKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
       },
-      "Next": "Sweep: registry"
+      "Next": "Sweep: more requests?"
     },
     "Sweep: registry": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
-      "Arguments": {
-        "TableName": "${registry_table}"
-      },
+      "Arguments": "{% $merge([{'TableName': '${registry_table}'}, $registryKey != null ? {'ExclusiveStartKey': $registryKey} : {}]) %}",
       "Assign": {
-        "registryItems": "{% $append([], $states.result.Items) %}"
+        "registryItems": "{% $append($registryItems, $states.result.Items) %}",
+        "registryKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
       },
-      "Next": "Sweep: ledger"
+      "Next": "Sweep: more registry?"
     },
     "Sweep: ledger": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
-      "Arguments": {
-        "TableName": "${ledger_table}"
-      },
+      "Arguments": "{% $merge([{'TableName': '${ledger_table}', 'ProjectionExpression': 'applicationArn, principalId, #u, managed, activeRequestIds', 'ExpressionAttributeNames': {'#u': 'username'}}, $ledgerKey != null ? {'ExclusiveStartKey': $ledgerKey} : {}]) %}",
       "Assign": {
-        "ledgerItems": "{% $append([], $states.result.Items) %}"
+        "ledgerItems": "{% $append($ledgerItems, $states.result.Items) %}",
+        "ledgerKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
       },
-      "Next": "Sweep: targets"
+      "Next": "Sweep: more ledger?"
     },
     "Sweep: targets": {
       "Type": "Pass",
@@ -169,40 +162,28 @@
             "Assign": {
               "target": "{% $states.input.target %}",
               "pass": 1,
-              "runDryRun": "{% $states.input.dryRun %}"
+              "runDryRun": "{% $states.input.dryRun %}",
+              "principalId": "{% $exists($states.input.target.userId) ? $states.input.target.userId : '' %}",
+              "hintIds": [],
+              "candidates": [],
+              "candidatesKey": null
             },
-            "Next": "R: candidates"
+            "Next": "R: principal known for hint?"
           },
           "R: candidates": {
             "Type": "Task",
-            "Comment": "This user's in-progress requests. The status is only a hint; each is verified next.",
+            "Comment": "This user's in-progress requests, every page. The status is only a hint; each is verified next.",
             "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
-            "Arguments": {
-              "TableName": "${requests_table}",
-              "IndexName": "byStatus",
-              "KeyConditionExpression": "#s = :s",
-              "FilterExpression": "#u = :u",
-              "ExpressionAttributeNames": {
-                "#s": "status",
-                "#u": "username"
-              },
-              "ExpressionAttributeValues": {
-                ":s": {
-                  "S": "in progress"
-                },
-                ":u": {
-                  "S": "{% $target.username %}"
-                }
-              }
-            },
+            "Arguments": "{% $merge([{'TableName': '${requests_table}', 'IndexName': 'byStatus', 'KeyConditionExpression': '#s = :s', 'FilterExpression': '#u = :u', 'ProjectionExpression': '#i', 'ExpressionAttributeNames': {'#s': 'status', '#u': 'username', '#i': 'id'}, 'ExpressionAttributeValues': {':s': {'S': 'in progress'}, ':u': {'S': $target.username}}}, $candidatesKey != null ? {'ExclusiveStartKey': $candidatesKey} : {}]) %}",
             "Assign": {
-              "candidates": "{% $append([], $states.result.Items.id.S) %}"
+              "candidates": "{% $append($candidates, $states.result.Items.id.S) %}",
+              "candidatesKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
             },
-            "Next": "R: verify"
+            "Next": "R: more candidates?"
           },
           "R: verify": {
             "Type": "Map",
-            "Items": "{% $candidates %}",
+            "Items": "{% $append([], $distinct($append($append($candidates, $hintIds), $exists($target.triggerId) ? [$target.triggerId] : []))) %}",
             "ItemSelector": {
               "requestId": "{% $states.context.Map.Item.Value %}",
               "userId": "{% $exists($target.userId) ? $target.userId : '' %}",
@@ -457,6 +438,10 @@
             "Type": "Choice",
             "Choices": [
               {
+                "Condition": "{% $action = 'delete' and $pass < 2 %}",
+                "Next": "R: confirm before delete"
+              },
+              {
                 "Condition": "{% $action = 'keep-owned' %}",
                 "Next": "R: record owned"
               },
@@ -650,10 +635,10 @@
                 "ErrorEquals": [
                   "SsoAdmin.ConflictException"
                 ],
-                "Next": "R: report"
+                "Next": "R: again?"
               }
             ],
-            "Next": "R: report"
+            "Next": "R: confirm owned"
           },
           "R: delete": {
             "Type": "Task",
@@ -723,10 +708,10 @@
           },
           "R: again?": {
             "Type": "Choice",
-            "Comment": "Start again with a fresh read after a delete, or when another run wrote the ledger first.",
+            "Comment": "Verify everything again after a create, a delete, a conflict or a lost lock.",
             "Choices": [
               {
-                "Condition": "{% $pass < 3 %}",
+                "Condition": "{% $pass < 4 %}",
                 "Next": "R: second pass"
               }
             ],
@@ -735,9 +720,12 @@
           "R: second pass": {
             "Type": "Pass",
             "Assign": {
-              "pass": "{% $pass + 1 %}"
+              "pass": "{% $pass + 1 %}",
+              "candidates": [],
+              "candidatesKey": null,
+              "hintIds": []
             },
-            "Next": "R: candidates"
+            "Next": "R: principal known for hint?"
           },
           "R: clear ids": {
             "Type": "Task",
@@ -780,6 +768,97 @@
             "Type": "Pass",
             "Output": "{% { 'applicationArn': $target.applicationArn, 'principalId': $principalId, 'username': $target.username, 'activeRequestIds': $activeIds, 'managed': $managed, 'assigned': $assigned, 'action': $action, 'dryRun': $runDryRun, 'pass': $pass } %}",
             "End": true
+          },
+          "R: principal known for hint?": {
+            "Type": "Choice",
+            "Comment": "Ids already in the ledger are re-verified too, so editing a live request's status cannot drop it.",
+            "Choices": [
+              {
+                "Condition": "{% $principalId != '' %}",
+                "Next": "R: ledger hint"
+              }
+            ],
+            "Default": "R: candidates"
+          },
+          "R: ledger hint": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Arguments": {
+              "TableName": "${ledger_table}",
+              "Key": {
+                "applicationArn": {
+                  "S": "{% $target.applicationArn %}"
+                },
+                "principalId": {
+                  "S": "{% $principalId %}"
+                }
+              }
+            },
+            "Assign": {
+              "hintIds": "{% $append([], $states.result.Item.activeRequestIds.SS) %}"
+            },
+            "Next": "R: candidates"
+          },
+          "R: more candidates?": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Condition": "{% $candidatesKey != null %}",
+                "Next": "R: candidates"
+              }
+            ],
+            "Default": "R: verify"
+          },
+          "R: confirm before delete": {
+            "Type": "Wait",
+            "Comment": "Never remove access on a single look: wait, then verify everything again.",
+            "Seconds": 5,
+            "Next": "R: second pass"
+          },
+          "R: confirm owned": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:updateItem",
+            "Comment": "Unconditional: this run created the assignment, so it must stay owned even if another run released the row meanwhile. The re-check then removes it if no session is active.",
+            "Arguments": {
+              "TableName": "${ledger_table}",
+              "Key": {
+                "applicationArn": {
+                  "S": "{% $target.applicationArn %}"
+                },
+                "principalId": {
+                  "S": "{% $principalId %}"
+                }
+              },
+              "UpdateExpression": "SET managed = :m, #u = :u, updatedAt = :t ADD rev :one",
+              "ExpressionAttributeNames": {
+                "#u": "username"
+              },
+              "ExpressionAttributeValues": {
+                ":m": {
+                  "S": "owned"
+                },
+                ":u": {
+                  "S": "{% $target.username %}"
+                },
+                ":t": {
+                  "S": "{% $now() %}"
+                },
+                ":one": {
+                  "N": "1"
+                }
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 5,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "R: again?"
           }
         }
       },
@@ -788,6 +867,36 @@
     },
     "Done": {
       "Type": "Succeed"
+    },
+    "Sweep: more requests?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $rowsKey != null %}",
+          "Next": "Sweep: in-progress requests"
+        }
+      ],
+      "Default": "Sweep: registry"
+    },
+    "Sweep: more registry?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $registryKey != null %}",
+          "Next": "Sweep: registry"
+        }
+      ],
+      "Default": "Sweep: ledger"
+    },
+    "Sweep: more ledger?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $ledgerKey != null %}",
+          "Next": "Sweep: ledger"
+        }
+      ],
+      "Default": "Sweep: targets"
     }
   }
 }
