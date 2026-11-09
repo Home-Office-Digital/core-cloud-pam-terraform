@@ -40,9 +40,10 @@ EventBridge Scheduler (sweep) ────┤
 - **Least privilege.** Read-only on TEAM's executions and the `byStatus` index of the
   requests table. Application assignments only on applications tagged
   `team-appstream-managed = true`.
-- **Audit trail.** Step Functions keeps every run's history for 90 days, and X-Ray tracing
-  is on. CloudWatch execution logging is off: its delivery actions only accept
-  `Resource "*"`, which the severity gate blocks.
+- **Audit trail.** Full execution history goes to CloudWatch Logs (`level = ALL`, with
+  execution data), encrypted with the module's CMK, alongside X-Ray tracing. The log
+  delivery actions have no resource-level support, so that one statement uses
+  `Resource "*"`; every other statement is scoped.
 - **Safe first apply.** `dry_run`, a stopped pipe and a disabled sweep are the defaults.
   A dry run reports the intended `action` for each target and changes nothing.
 
@@ -54,6 +55,7 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 
 | Name | Type |
 |------|------|
+| [aws_cloudwatch_log_group.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_cloudwatch_metric_alarm.dlq_not_empty](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm) | resource |
 | [aws_cloudwatch_metric_alarm.executions_failed](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_metric_alarm) | resource |
 | [aws_iam_role.pipe](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
@@ -62,6 +64,7 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 | [aws_iam_role_policy.pipe](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy.scheduler](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy.state_machine](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.state_machine_logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_iam_role_policy_attachment.state_machine_xray](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_kms_alias.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
 | [aws_kms_key.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
@@ -83,6 +86,7 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 | <a name="input_alarm_actions"></a> [alarm\_actions](#input\_alarm\_actions) | ARNs notified when an alarm changes state, e.g. an SNS topic | `list(string)` | `[]` | no |
 | <a name="input_dry_run"></a> [dry\_run](#input\_dry\_run) | Report intended actions without creating or deleting assignments or writing the ledger | `bool` | `true` | no |
 | <a name="input_env"></a> [env](#input\_env) | Suffix shared with the registry and ref-count tables, e.g. main for TEAM-AppStream-Registry-main | `string` | `"main"` | no |
+| <a name="input_log_retention_days"></a> [log\_retention\_days](#input\_log\_retention\_days) | Retention for the execution log group | `number` | `365` | no |
 | <a name="input_pipe_enabled"></a> [pipe\_enabled](#input\_pipe\_enabled) | Start the pipe. Off by default so a first apply reads nothing from the TEAM stream. | `bool` | `false` | no |
 | <a name="input_requests_table_name"></a> [requests\_table\_name](#input\_requests\_table\_name) | TEAM requests table, e.g. requests-<appsync api id>-main. Its stream drives the pipe. | `string` | n/a | yes |
 | <a name="input_sweep_enabled"></a> [sweep\_enabled](#input\_sweep\_enabled) | Enable the scheduled sweep | `bool` | `false` | no |

@@ -57,6 +57,12 @@ variable "alarm_actions" {
   default     = []
 }
 
+variable "log_retention_days" {
+  description = "Retention for the execution log group"
+  type        = number
+  default     = 365
+}
+
 variable "reader_role_arns" {
   description = "IAM role ARNs allowed to decrypt the schedule payload, e.g. the terragrunt plan role, which reads it on refresh. Must already exist."
   type        = list(string)

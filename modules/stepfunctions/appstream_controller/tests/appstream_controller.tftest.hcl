@@ -5,6 +5,11 @@ mock_provider "aws" {
       arn = "arn:aws:iam::111122223333:role/mock"
     }
   }
+  mock_resource "aws_cloudwatch_log_group" {
+    defaults = {
+      arn = "arn:aws:logs:eu-west-2:111122223333:log-group:/aws/vendedlogs/states/TEAM-AppStream-Controller-main"
+    }
+  }
   mock_resource "aws_sfn_state_machine" {
     defaults = {
       arn = "arn:aws:states:eu-west-2:111122223333:stateMachine:TEAM-AppStream-Controller-main"
@@ -109,17 +114,22 @@ run "safe_by_default" {
   }
 
   assert {
-    condition     = aws_sfn_state_machine.controller.tracing_configuration[0].enabled
-    error_message = "Tracing must be on."
+    condition     = aws_sfn_state_machine.controller.tracing_configuration[0].enabled && aws_sfn_state_machine.controller.logging_configuration[0].level == "ALL" && aws_sfn_state_machine.controller.logging_configuration[0].include_execution_data
+    error_message = "Tracing and full execution history logging must be on."
   }
 
   assert {
-    condition     = aws_scheduler_schedule.sweep.kms_key_arn == aws_kms_key.controller.arn
-    error_message = "The schedule payload must use the module's CMK."
+    condition     = aws_cloudwatch_log_group.controller.kms_key_id == aws_kms_key.controller.arn && aws_scheduler_schedule.sweep.kms_key_arn == aws_kms_key.controller.arn
+    error_message = "Execution logs hold user ids, and both they and the schedule payload must use the module's CMK."
   }
 
   assert {
-    condition     = length(jsondecode(aws_kms_key_policy.controller.policy).Statement) == 1
+    condition     = one([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow CloudWatch Logs for this log group only"]).Condition == { ArnEquals = { "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:eu-west-2:111122223333:log-group:/aws/vendedlogs/states/TEAM-AppStream-Controller-main" } }
+    error_message = "CloudWatch Logs may only use the key for this log group."
+  }
+
+  assert {
+    condition     = length([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow readers to decrypt the schedule payload"]) == 0
     error_message = "No reader statement may be rendered when reader_role_arns is empty."
   }
 }
@@ -161,10 +171,14 @@ run "least_privilege" {
     error_message = "Table keys may only be used through DynamoDB."
   }
 
-  # The CI severity gate blocks Resource "*" on restrictable actions.
   assert {
     condition     = alltrue(flatten([for p in [aws_iam_role_policy.state_machine.policy, aws_iam_role_policy.pipe.policy, aws_iam_role_policy.scheduler.policy] : [for s in jsondecode(p).Statement : !contains(s.Resource, "*")]]))
-    error_message = "No statement may use Resource \"*\"."
+    error_message = "Only the log delivery policy may use Resource \"*\"."
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.state_machine_logs.policy).Statement[0].Action == ["logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies", "logs:DescribeLogGroups"] && length(jsondecode(aws_iam_role_policy.state_machine_logs.policy).Statement) == 1
+    error_message = "The Resource \"*\" statement must hold the log delivery actions only."
   }
 
   assert {
