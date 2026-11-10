@@ -1,0 +1,1019 @@
+{
+  "Comment": "Grants and removes AppStream application assignments to match active TEAM sessions. Decisions come from TEAM's own executions, never from the requests table status.",
+  "QueryLanguage": "JSONata",
+  "TimeoutSeconds": 900,
+  "StartAt": "Start",
+  "States": {
+    "Start": {
+      "Type": "Pass",
+      "Assign": {
+        "dryRun": ${dry_run},
+        "rows": [],
+        "rowsKey": null,
+        "registryItems": [],
+        "registryKey": null,
+        "ledgerItems": [],
+        "ledgerKey": null
+      },
+      "Next": "Mode?"
+    },
+    "Mode?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.mode = 'sweep' %}",
+          "Next": "Sweep: in-progress requests"
+        }
+      ],
+      "Default": "Event: request id"
+    },
+    "Event: request id": {
+      "Type": "Pass",
+      "Comment": "Pipe input is a batch of stream records. A manual test can pass {\"requestId\": \"...\"} instead.",
+      "Assign": {
+        "requestId": "{% ( $r := $type($states.input) = 'array' ? $states.input[0] : $states.input; $id := $exists($r.requestId) ? $r.requestId : ($exists($r.dynamodb.Keys.id.S) ? $r.dynamodb.Keys.id.S : ''); $type($id) = 'string' and $contains($id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/) ? $id : '' ) %}"
+      },
+      "Next": "Event: request id?"
+    },
+    "Event: request id?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $requestId != '' %}",
+          "Next": "Event: Schedule run"
+        }
+      ],
+      "Default": "Done"
+    },
+    "Event: Schedule run": {
+      "Type": "Task",
+      "Comment": "TEAM names the Schedule run after the request id, and only starts it after approval.",
+      "Resource": "arn:aws:states:::aws-sdk:sfn:getExecutionHistory",
+      "Arguments": {
+        "ExecutionArn": "{% '${schedule_exec_prefix}' & $requestId %}",
+        "MaxResults": 100
+      },
+      "Assign": {
+        "grantArn": "{% ( $o := $states.result.Events[Type = 'TaskSucceeded' and TaskSucceededEventDetails.ResourceType = 'states'][0].TaskSucceededEventDetails.Output; $exists($o) ? $parse($o).ExecutionArn : '' ) %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "Sfn.ExecutionDoesNotExistException"
+          ],
+          "Next": "Done"
+        }
+      ],
+      "Next": "Event: Grant run?"
+    },
+    "Event: Grant run?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $grantArn != '' %}",
+          "Next": "Event: Grant run"
+        }
+      ],
+      "Default": "Done"
+    },
+    "Event: Grant run": {
+      "Type": "Task",
+      "Comment": "userId, username and accountId come from the Grant run input, which only TEAM's backend sets.",
+      "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+      "Arguments": {
+        "ExecutionArn": "{% $grantArn %}"
+      },
+      "Assign": {
+        "grant": "{% $parse($states.result.Input) %}"
+      },
+      "Next": "Event: registry"
+    },
+    "Event: registry": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Arguments": {
+        "TableName": "${registry_table}",
+        "Key": {
+          "accountId": {
+            "S": "{% $grant.accountId %}"
+          }
+        }
+      },
+      "Assign": {
+        "targets": "{% $exists($states.result.Item) and $exists($grant.userId) ? [{ 'userId': $grant.userId, 'username': $grant.username, 'applicationArn': $states.result.Item.applicationArn.S, 'triggerId': $requestId }] : [] %}"
+      },
+      "Next": "Reconcile"
+    },
+    "Sweep: in-progress requests": {
+      "Type": "Task",
+      "Comment": "Candidates only. Every one is verified against TEAM's executions before it counts.",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+      "Arguments": "{% $merge([{'TableName': '${requests_table}', 'IndexName': 'byStatus', 'KeyConditionExpression': '#s = :s', 'ProjectionExpression': '#i, #u, #a', 'ExpressionAttributeNames': {'#s': 'status', '#i': 'id', '#u': 'username', '#a': 'accountId'}, 'ExpressionAttributeValues': {':s': {'S': 'in progress'}}}, $rowsKey != null ? {'ExclusiveStartKey': $rowsKey} : {}]) %}",
+      "Assign": {
+        "rows": "{% $append($rows, $states.result.Items) %}",
+        "rowsKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
+      },
+      "Next": "Sweep: more requests?"
+    },
+    "Sweep: registry": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Arguments": "{% $merge([{'TableName': '${registry_table}'}, $registryKey != null ? {'ExclusiveStartKey': $registryKey} : {}]) %}",
+      "Assign": {
+        "registryItems": "{% $append($registryItems, $states.result.Items) %}",
+        "registryKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
+      },
+      "Next": "Sweep: more registry?"
+    },
+    "Sweep: ledger": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Arguments": "{% $merge([{'TableName': '${ledger_table}', 'ProjectionExpression': 'applicationArn, principalId, #u, managed, activeRequestIds', 'FilterExpression': 'managed = :owned OR attribute_exists(activeRequestIds)', 'ExpressionAttributeValues': {':owned': {'S': 'owned'}}, 'ExpressionAttributeNames': {'#u': 'username'}}, $ledgerKey != null ? {'ExclusiveStartKey': $ledgerKey} : {}]) %}",
+      "Assign": {
+        "ledgerItems": "{% $append($ledgerItems, $states.result.Items) %}",
+        "ledgerKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
+      },
+      "Next": "Sweep: more ledger?"
+    },
+    "Sweep: targets": {
+      "Type": "Pass",
+      "Comment": "One target per managed ledger row, so every tracked principal is re-checked. Requests not already tracked by a ledger row get their own targets, grouped by username and application but limited to those untracked ids, so a reused username cannot hide a new principal behind an old one. Each target carries its candidate request ids from the sweep's query.",
+      "Assign": {
+        "targets": "{% ( $reg := $merge($append([{}], $registryItems.{ accountId.S: applicationArn.S })); $ids := function($u, $a) { $append([], $rows[username.S = $u and $lookup($reg, accountId.S) = $a].id.S) }; $tracked := $append([], $ledgerItems.activeRequestIds.SS); $fromLedger := $append([], $ledgerItems[managed.S = 'owned' or $exists(activeRequestIds)].{ 'username': username.S, 'userId': principalId.S, 'applicationArn': applicationArn.S }); $untracked := $append([], $rows[$type(username.S) = 'string' and $exists($lookup($reg, accountId.S)) and $not(id.S in $tracked)]); $fromRequests := $append([], $untracked.{ 'username': username.S, 'userId': '', 'applicationArn': $lookup($reg, accountId.S), 'id': id.S }); $newKeys := $append([], $distinct($fromRequests.(username & '|' & applicationArn))); $append($append([], $fromLedger.$merge([$, { 'candidateIds': $ids(username, applicationArn) }])), $append([], $newKeys.( $k := $; $g := $fromRequests[(username & '|' & applicationArn) = $k]; $t := $g[0]; { 'username': $t.username, 'userId': '', 'applicationArn': $t.applicationArn, 'candidateIds': $append([], $g.id) } ))) ) %}"
+      },
+      "Next": "Reconcile"
+    },
+    "Reconcile": {
+      "Type": "Map",
+      "Items": "{% $targets %}",
+      "ItemSelector": {
+        "target": "{% $states.context.Map.Item.Value %}",
+        "dryRun": "{% $dryRun %}"
+      },
+      "MaxConcurrency": 5,
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "R: isolated",
+        "States": {
+          "R: isolated": {
+            "Type": "Parallel",
+            "Comment": "One target's failure is recorded and the others carry on.",
+            "Branches": [
+              {
+                "StartAt": "R: start",
+                "States": {
+                  "R: start": {
+                    "Type": "Pass",
+                    "Assign": {
+                      "target": "{% $states.input.target %}",
+                      "pass": 1,
+                      "runDryRun": "{% $states.input.dryRun %}",
+                      "principalId": "{% $exists($states.input.target.userId) ? $states.input.target.userId : '' %}",
+                      "hintIds": [],
+                      "candidates": "{% $exists($states.input.target.candidateIds) ? $states.input.target.candidateIds : [] %}",
+                      "candidatesKey": null,
+                      "managed": "",
+                      "rev": 0,
+                      "pendingDelete": false,
+                      "ledgerRead": false
+                    },
+                    "Next": "R: principal known for hint?"
+                  },
+                  "R: candidates": {
+                    "Type": "Task",
+                    "Comment": "This user's in-progress requests, every page. The status is only a hint; each is verified next.",
+                    "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+                    "Arguments": "{% $merge([{'TableName': '${requests_table}', 'IndexName': 'byStatus', 'KeyConditionExpression': '#s = :s', 'FilterExpression': '#u = :u', 'ProjectionExpression': '#i', 'ExpressionAttributeNames': {'#s': 'status', '#u': 'username', '#i': 'id'}, 'ExpressionAttributeValues': {':s': {'S': 'in progress'}, ':u': {'S': $target.username}}}, $candidatesKey != null ? {'ExclusiveStartKey': $candidatesKey} : {}]) %}",
+                    "Assign": {
+                      "candidates": "{% $append($candidates, $states.result.Items.id.S) %}",
+                      "candidatesKey": "{% $exists($states.result.LastEvaluatedKey) ? $states.result.LastEvaluatedKey : null %}"
+                    },
+                    "Next": "R: more candidates?"
+                  },
+                  "R: verify": {
+                    "Type": "Map",
+                    "Comment": "Only TEAM-style UUID request ids are checked. Anything else could make the execution ARN invalid, so it is ignored rather than allowed to fail the run.",
+                    "Items": "{% $append([], $distinct($append($append($candidates, $hintIds), $exists($target.triggerId) ? [$target.triggerId] : []))[$type($) = 'string' and $contains($, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)]) %}",
+                    "ItemSelector": {
+                      "requestId": "{% $states.context.Map.Item.Value %}",
+                      "userId": "{% $principalId %}",
+                      "username": "{% $type($target.username) = 'string' ? $target.username : '' %}",
+                      "applicationArn": "{% $target.applicationArn %}"
+                    },
+                    "MaxConcurrency": 5,
+                    "ItemProcessor": {
+                      "ProcessorConfig": {
+                        "Mode": "INLINE"
+                      },
+                      "StartAt": "V: start",
+                      "States": {
+                        "V: start": {
+                          "Type": "Pass",
+                          "Assign": {
+                            "item": "{% $states.input %}",
+                            "attempt": 0
+                          },
+                          "Next": "V: Schedule run"
+                        },
+                        "V: Schedule run": {
+                          "Type": "Task",
+                          "Comment": "No Schedule run means TEAM never approved this request.",
+                          "Resource": "arn:aws:states:::aws-sdk:sfn:getExecutionHistory",
+                          "Arguments": {
+                            "ExecutionArn": "{% '${schedule_exec_prefix}' & $item.requestId %}",
+                            "MaxResults": 100
+                          },
+                          "Assign": {
+                            "sessionGrantArn": "{% ( $o := $states.result.Events[Type = 'TaskSucceeded' and TaskSucceededEventDetails.ResourceType = 'states'][0].TaskSucceededEventDetails.Output; $exists($o) ? $parse($o).ExecutionArn : '' ) %}"
+                          },
+                          "Catch": [
+                            {
+                              "ErrorEquals": [
+                                "Sfn.ExecutionDoesNotExistException"
+                              ],
+                              "Next": "V: no"
+                            }
+                          ],
+                          "Next": "V: Grant run?"
+                        },
+                        "V: Grant run?": {
+                          "Type": "Choice",
+                          "Choices": [
+                            {
+                              "Condition": "{% $sessionGrantArn != '' %}",
+                              "Next": "V: Grant run"
+                            }
+                          ],
+                          "Default": "V: no"
+                        },
+                        "V: Grant run": {
+                          "Type": "Task",
+                          "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+                          "Arguments": {
+                            "ExecutionArn": "{% $sessionGrantArn %}"
+                          },
+                          "Assign": {
+                            "status": "{% $states.result.Status %}",
+                            "attempt": "{% $attempt + 1 %}",
+                            "sessionGrant": "{% $parse($states.result.Input) %}"
+                          },
+                          "Next": "V: Grant matches?"
+                        },
+                        "V: Grant matches?": {
+                          "Type": "Choice",
+                          "Comment": "Positive match only, so a missing field fails closed. The IdC user id decides once known: usernames can be renamed or reused.",
+                          "Choices": [
+                            {
+                              "Condition": "{% $status = 'RUNNING' and ($item.userId != '' ? $sessionGrant.userId = $item.userId : $sessionGrant.username = $item.username) %}",
+                              "Next": "V: Grant position"
+                            }
+                          ],
+                          "Default": "V: no"
+                        },
+                        "V: Grant position": {
+                          "Type": "Task",
+                          "Comment": "Active means the Grant run is in its session Wait. A failed grant never reaches it.",
+                          "Resource": "arn:aws:states:::aws-sdk:sfn:getExecutionHistory",
+                          "Arguments": {
+                            "ExecutionArn": "{% $sessionGrantArn %}",
+                            "ReverseOrder": true,
+                            "MaxResults": 1
+                          },
+                          "Assign": {
+                            "lastType": "{% $states.result.Events[0].Type %}"
+                          },
+                          "Next": "V: waiting?"
+                        },
+                        "V: waiting?": {
+                          "Type": "Choice",
+                          "Comment": "TEAM writes 'in progress' a moment before the Wait starts, so retry briefly.",
+                          "Choices": [
+                            {
+                              "Condition": "{% $lastType = 'WaitStateEntered' %}",
+                              "Next": "V: early revoke?"
+                            },
+                            {
+                              "Condition": "{% $attempt < 6 %}",
+                              "Next": "V: pause"
+                            }
+                          ],
+                          "Default": "V: no"
+                        },
+                        "V: pause": {
+                          "Type": "Wait",
+                          "Seconds": 5,
+                          "Next": "V: Grant run"
+                        },
+                        "V: early revoke?": {
+                          "Type": "Task",
+                          "Comment": "An early revoke starts a Revoke run named after the request id while the Grant run keeps waiting.",
+                          "Resource": "arn:aws:states:::aws-sdk:sfn:describeExecution",
+                          "Arguments": {
+                            "ExecutionArn": "{% '${revoke_exec_prefix}' & $item.requestId %}"
+                          },
+                          "Catch": [
+                            {
+                              "ErrorEquals": [
+                                "Sfn.ExecutionDoesNotExistException"
+                              ],
+                              "Next": "V: registry"
+                            }
+                          ],
+                          "Next": "V: no"
+                        },
+                        "V: registry": {
+                          "Type": "Task",
+                          "Resource": "arn:aws:states:::dynamodb:getItem",
+                          "Arguments": {
+                            "TableName": "${registry_table}",
+                            "Key": {
+                              "accountId": {
+                                "S": "{% $sessionGrant.accountId %}"
+                              }
+                            }
+                          },
+                          "Assign": {
+                            "app": "{% $exists($states.result.Item) ? $states.result.Item.applicationArn.S : '' %}"
+                          },
+                          "Next": "V: same application?"
+                        },
+                        "V: same application?": {
+                          "Type": "Choice",
+                          "Choices": [
+                            {
+                              "Condition": "{% $app = $item.applicationArn %}",
+                              "Next": "V: yes"
+                            }
+                          ],
+                          "Default": "V: no"
+                        },
+                        "V: yes": {
+                          "Type": "Pass",
+                          "Output": "{% { 'requestId': $item.requestId, 'active': true, 'userId': $sessionGrant.userId } %}",
+                          "End": true
+                        },
+                        "V: no": {
+                          "Type": "Pass",
+                          "Output": "{% { 'requestId': $item.requestId, 'active': false, 'userId': '' } %}",
+                          "End": true
+                        }
+                      }
+                    },
+                    "Assign": {
+                      "activeIds": "{% ( $u := $append([], $states.result[active = true].userId); $p := $principalId != '' ? $principalId : ($count($u) > 0 ? $u[0] : ''); $append([], $states.result[active = true and userId = $p].requestId) ) %}",
+                      "principalId": "{% ( $u := $append([], $states.result[active = true].userId); $principalId != '' ? $principalId : ($count($u) > 0 ? $u[0] : '') ) %}"
+                    },
+                    "Next": "R: principal known?"
+                  },
+                  "R: principal known?": {
+                    "Type": "Choice",
+                    "Comment": "No principal: nothing of ours to manage. A newly discovered one goes round once more, ledger first.",
+                    "Choices": [
+                      {
+                        "Condition": "{% $principalId != '' and $ledgerRead %}",
+                        "Next": "R: assignment"
+                      },
+                      {
+                        "Condition": "{% $principalId != '' %}",
+                        "Next": "R: discovered principal"
+                      }
+                    ],
+                    "Default": "R: nothing to manage"
+                  },
+                  "R: nothing to manage": {
+                    "Type": "Pass",
+                    "Output": "{% { 'applicationArn': $target.applicationArn, 'username': $target.username, 'action': 'none' } %}",
+                    "End": true
+                  },
+                  "R: assignment": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::aws-sdk:ssoadmin:describeApplicationAssignment",
+                    "Arguments": {
+                      "ApplicationArn": "{% $target.applicationArn %}",
+                      "PrincipalId": "{% $principalId %}",
+                      "PrincipalType": "USER"
+                    },
+                    "Assign": {
+                      "assigned": true
+                    },
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "SsoAdmin.ResourceNotFoundException"
+                        ],
+                        "Assign": {
+                          "assigned": false
+                        },
+                        "Next": "R: decide"
+                      }
+                    ],
+                    "Next": "R: decide"
+                  },
+                  "R: decide": {
+                    "Type": "Pass",
+                    "Comment": "An assignment that already existed and is not owned by us is recorded as preexisting and never removed.",
+                    "Assign": {
+                      "action": "{% $count($activeIds) > 0 ? ($assigned ? ($managed = 'owned' ? 'keep-owned' : 'keep-preexisting') : 'create') : ($managed = 'owned' ? 'delete' : ($managed = 'preexisting' ? 'clear-preexisting' : 'none')) %}"
+                    },
+                    "Next": "R: track delete"
+                  },
+                  "R: dry run?": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Condition": "{% $runDryRun = true %}",
+                        "Next": "R: report"
+                      }
+                    ],
+                    "Default": "R: apply"
+                  },
+                  "R: apply": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Condition": "{% $action = 'delete' and $pendingDelete = false %}",
+                        "Next": "R: confirm before delete"
+                      },
+                      {
+                        "Condition": "{% $action = 'keep-owned' %}",
+                        "Next": "R: record owned"
+                      },
+                      {
+                        "Condition": "{% $action = 'keep-preexisting' %}",
+                        "Next": "R: record preexisting"
+                      },
+                      {
+                        "Condition": "{% $action = 'create' %}",
+                        "Next": "R: claim"
+                      },
+                      {
+                        "Condition": "{% $action = 'delete' %}",
+                        "Next": "R: lock for delete"
+                      },
+                      {
+                        "Condition": "{% $action = 'clear-preexisting' %}",
+                        "Next": "R: clear ids"
+                      }
+                    ],
+                    "Default": "R: report"
+                  },
+                  "R: record owned": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "SET activeRequestIds = :ids, managed = :m, #u = :u, updatedAt = :t, rev = :next",
+                      "ExpressionAttributeNames": {
+                        "#u": "username"
+                      },
+                      "ExpressionAttributeValues": {
+                        ":ids": {
+                          "SS": "{% $activeIds %}"
+                        },
+                        ":m": {
+                          "S": "owned"
+                        },
+                        ":u": {
+                          "S": "{% $type($target.username) = 'string' ? $target.username : '' %}"
+                        },
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      },
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
+                    },
+                    "Next": "R: report",
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ]
+                  },
+                  "R: record preexisting": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "SET activeRequestIds = :ids, managed = :m, #u = :u, updatedAt = :t, rev = :next",
+                      "ExpressionAttributeNames": {
+                        "#u": "username"
+                      },
+                      "ExpressionAttributeValues": {
+                        ":ids": {
+                          "SS": "{% $activeIds %}"
+                        },
+                        ":m": {
+                          "S": "preexisting"
+                        },
+                        ":u": {
+                          "S": "{% $type($target.username) = 'string' ? $target.username : '' %}"
+                        },
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      },
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
+                    },
+                    "Next": "R: report",
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ]
+                  },
+                  "R: claim": {
+                    "Type": "Task",
+                    "Comment": "Ownership is recorded before the create, so a failure after it can never leave an assignment we created looking preexisting.",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "SET activeRequestIds = :ids, managed = :m, #u = :u, updatedAt = :t, rev = :next",
+                      "ExpressionAttributeNames": {
+                        "#u": "username"
+                      },
+                      "ExpressionAttributeValues": {
+                        ":ids": {
+                          "SS": "{% $activeIds %}"
+                        },
+                        ":m": {
+                          "S": "owned"
+                        },
+                        ":u": {
+                          "S": "{% $type($target.username) = 'string' ? $target.username : '' %}"
+                        },
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      },
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
+                    },
+                    "Next": "R: create",
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ]
+                  },
+                  "R: create": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::aws-sdk:ssoadmin:createApplicationAssignment",
+                    "Arguments": {
+                      "ApplicationArn": "{% $target.applicationArn %}",
+                      "PrincipalId": "{% $principalId %}",
+                      "PrincipalType": "USER"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "SsoAdmin.ThrottlingException"
+                        ],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "SsoAdmin.ConflictException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ],
+                    "Next": "R: confirm owned"
+                  },
+                  "R: delete": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::aws-sdk:ssoadmin:deleteApplicationAssignment",
+                    "Arguments": {
+                      "ApplicationArn": "{% $target.applicationArn %}",
+                      "PrincipalId": "{% $principalId %}",
+                      "PrincipalType": "USER"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "SsoAdmin.ThrottlingException"
+                        ],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "SsoAdmin.ResourceNotFoundException"
+                        ],
+                        "Next": "R: release"
+                      }
+                    ],
+                    "Next": "R: release"
+                  },
+                  "R: release": {
+                    "Type": "Task",
+                    "Comment": "Released only after the delete, so a failed delete stays owned and is retried. If another run claimed it meanwhile, the lock fails and the next pass recreates the assignment.",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "REMOVE activeRequestIds, managed SET updatedAt = :t, rev = :next",
+                      "ExpressionAttributeValues": {
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      },
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
+                    },
+                    "Next": "R: again?",
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ],
+                    "Assign": {
+                      "pendingDelete": false
+                    }
+                  },
+                  "R: again?": {
+                    "Type": "Choice",
+                    "Comment": "Verify everything again after a create, a delete, a conflict or a lost lock.",
+                    "Choices": [
+                      {
+                        "Condition": "{% $pass < 5 %}",
+                        "Next": "R: second pass"
+                      }
+                    ],
+                    "Default": "R: report"
+                  },
+                  "R: second pass": {
+                    "Type": "Pass",
+                    "Assign": {
+                      "pass": "{% $pass + 1 %}",
+                      "candidates": [],
+                      "candidatesKey": null,
+                      "hintIds": [],
+                      "ledgerRead": false
+                    },
+                    "Next": "R: principal known for hint?"
+                  },
+                  "R: clear ids": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "REMOVE activeRequestIds SET updatedAt = :t, rev = :next",
+                      "ExpressionAttributeValues": {
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      },
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
+                    },
+                    "Next": "R: report",
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ]
+                  },
+                  "R: report": {
+                    "Type": "Pass",
+                    "Output": "{% { 'applicationArn': $target.applicationArn, 'principalId': $principalId, 'username': $target.username, 'activeRequestIds': $activeIds, 'managed': $managed, 'assigned': $assigned, 'action': $action, 'dryRun': $runDryRun, 'pass': $pass } %}",
+                    "End": true
+                  },
+                  "R: principal known for hint?": {
+                    "Type": "Choice",
+                    "Comment": "With a known principal, read the ledger first: its ids are re-verified too, so an edited status cannot drop a live session.",
+                    "Choices": [
+                      {
+                        "Condition": "{% $principalId != '' %}",
+                        "Next": "R: ledger"
+                      }
+                    ],
+                    "Default": "R: query?"
+                  },
+                  "R: more candidates?": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Condition": "{% $candidatesKey != null %}",
+                        "Next": "R: candidates"
+                      }
+                    ],
+                    "Default": "R: verify"
+                  },
+                  "R: confirm before delete": {
+                    "Type": "Pass",
+                    "Assign": {
+                      "pendingDelete": true
+                    },
+                    "Next": "R: confirm wait"
+                  },
+                  "R: confirm owned": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Comment": "Unconditional: this run created the assignment, so it must stay owned even if another run released the row meanwhile. The re-check then removes it if no session is active.",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "SET managed = :m, #u = :u, updatedAt = :t ADD rev :one",
+                      "ExpressionAttributeNames": {
+                        "#u": "username"
+                      },
+                      "ExpressionAttributeValues": {
+                        ":m": {
+                          "S": "owned"
+                        },
+                        ":u": {
+                          "S": "{% $type($target.username) = 'string' ? $target.username : '' %}"
+                        },
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":one": {
+                          "N": "1"
+                        }
+                      }
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "States.ALL"
+                        ],
+                        "IntervalSeconds": 1,
+                        "MaxAttempts": 5,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "Next": "R: again?"
+                  },
+                  "R: ledger": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:getItem",
+                    "Comment": "Read before verifying, consistently, so every conditional write below is against what this pass saw.",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "ConsistentRead": true
+                    },
+                    "Assign": {
+                      "hintIds": "{% $append([], $states.result.Item.activeRequestIds.SS) %}",
+                      "managed": "{% $exists($states.result.Item.managed.S) ? $states.result.Item.managed.S : '' %}",
+                      "rev": "{% $exists($states.result.Item.rev.N) ? $number($states.result.Item.rev.N) : 0 %}",
+                      "ledgerRead": true
+                    },
+                    "Next": "R: query?"
+                  },
+                  "R: discovered principal": {
+                    "Type": "Pass",
+                    "Assign": {
+                      "candidatesKey": null
+                    },
+                    "Next": "R: ledger"
+                  },
+                  "R: track delete": {
+                    "Type": "Pass",
+                    "Comment": "A delete needs two consecutive passes that both decide delete.",
+                    "Assign": {
+                      "pendingDelete": "{% $action = 'delete' ? $pendingDelete : false %}"
+                    },
+                    "Next": "R: dry run?"
+                  },
+                  "R: confirm wait": {
+                    "Type": "Wait",
+                    "Comment": "Never remove access on a single look: wait, then verify everything again.",
+                    "Seconds": 5,
+                    "Next": "R: second pass"
+                  },
+                  "R: lock for delete": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Comment": "If any run wrote the row since this pass read it (for example a new session), the lock fails and nothing is deleted.",
+                    "Arguments": {
+                      "TableName": "${ledger_table}",
+                      "Key": {
+                        "applicationArn": {
+                          "S": "{% $target.applicationArn %}"
+                        },
+                        "principalId": {
+                          "S": "{% $principalId %}"
+                        }
+                      },
+                      "UpdateExpression": "SET updatedAt = :t, rev = :next",
+                      "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev",
+                      "ExpressionAttributeValues": {
+                        ":t": {
+                          "S": "{% $now() %}"
+                        },
+                        ":rev": {
+                          "N": "{% $string($rev) %}"
+                        },
+                        ":next": {
+                          "N": "{% $string($rev + 1) %}"
+                        }
+                      }
+                    },
+                    "Assign": {
+                      "rev": "{% $rev + 1 %}"
+                    },
+                    "Catch": [
+                      {
+                        "ErrorEquals": [
+                          "DynamoDB.ConditionalCheckFailedException"
+                        ],
+                        "Next": "R: again?"
+                      }
+                    ],
+                    "Next": "R: delete"
+                  },
+                  "R: query?": {
+                    "Type": "Choice",
+                    "Comment": "The sweep's first pass reuses its own query. Every later pass, and every event, queries afresh. With no username to query by, only the ledger and trigger ids are checked.",
+                    "Choices": [
+                      {
+                        "Condition": "{% $not($type($target.username) = 'string') or $target.username = '' %}",
+                        "Next": "R: verify"
+                      },
+                      {
+                        "Condition": "{% $pass = 1 and $exists($target.candidateIds) %}",
+                        "Next": "R: verify"
+                      }
+                    ],
+                    "Default": "R: candidates"
+                  }
+                }
+              }
+            ],
+            "Output": "{% $states.result[0] %}",
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Output": "{% { 'applicationArn': $states.input.target.applicationArn, 'principalId': $states.input.target.userId, 'action': 'error', 'error': $states.errorOutput.Error, 'cause': $substring($string($states.errorOutput.Cause), 0, 500) } %}",
+                "Next": "R: failed"
+              }
+            ],
+            "End": true
+          },
+          "R: failed": {
+            "Type": "Pass",
+            "End": true
+          }
+        }
+      },
+      "Output": "{% { 'results': $states.result } %}",
+      "Next": "Any target failed?"
+    },
+    "Done": {
+      "Type": "Succeed"
+    },
+    "Sweep: more requests?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $rowsKey != null %}",
+          "Next": "Sweep: in-progress requests"
+        }
+      ],
+      "Default": "Sweep: registry"
+    },
+    "Sweep: more registry?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $registryKey != null %}",
+          "Next": "Sweep: registry"
+        }
+      ],
+      "Default": "Sweep: ledger"
+    },
+    "Sweep: more ledger?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $ledgerKey != null %}",
+          "Next": "Sweep: ledger"
+        }
+      ],
+      "Default": "Sweep: targets"
+    },
+    "Any target failed?": {
+      "Type": "Choice",
+      "Comment": "Every target has been tried. Fail the run if any errored, so the failed-runs alarm fires.",
+      "Choices": [
+        {
+          "Condition": "{% $count($states.input.results[action = 'error']) > 0 %}",
+          "Next": "Targets failed"
+        }
+      ],
+      "Default": "Done"
+    },
+    "Targets failed": {
+      "Type": "Fail",
+      "Error": "ReconcileTargetsFailed",
+      "Cause": "{% $string($count($states.input.results[action = 'error'])) & ' target(s) failed; details are in the output of the Reconcile state' %}"
+    }
+  }
+}

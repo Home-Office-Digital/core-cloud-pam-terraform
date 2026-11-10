@@ -21,10 +21,9 @@ resource "aws_dynamodb_table" "appstream_refcount" {
     type = "S"
   }
 
-  # Do not declare activeRequestIds here. DynamoDB only requires key attributes,
-  # and it must stay a String Set: atomic ADD / DELETE update expressions only work
-  # on sets. Declaring it (or modelling it as a List) forces read-modify-write and
-  # reintroduces the race this table exists to remove.
+  # Do not declare activeRequestIds here. DynamoDB only requires key attributes. Keep it
+  # a String Set: an empty set cannot be stored, so the attribute is absent exactly when
+  # no session is active. Concurrent writers are serialised by the rev attribute.
 
   # Do not add a TTL. Once a set empties the row persists as a key-only tombstone, which
   # makes a TTL look like a tidy way to reap them - but a timestamp written at grant time

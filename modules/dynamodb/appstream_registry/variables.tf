@@ -1,5 +1,5 @@
 variable "name" {
-  description = "Table name. Must match what the TEAM state machines build from the Amplify env, e.g. TEAM-AppStream-Registry-main"
+  description = "Table name. Must match the name the AppStream controller derives from its env, e.g. TEAM-AppStream-Registry-main"
   type        = string
 
   validation {

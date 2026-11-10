@@ -83,7 +83,7 @@ resource "aws_kms_key_policy" "appstream_registry" {
 data "aws_caller_identity" "current" {}
 
 data "aws_iam_policy_document" "appstream_registry_kms" {
-  # Required by the lockout safety check, and delegates to IAM for the apply and state machine roles.
+  # Required by the lockout safety check, and delegates to IAM for the apply and controller roles.
   statement {
     sid = "Allow account administration of the key"
 

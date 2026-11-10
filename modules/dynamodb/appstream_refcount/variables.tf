@@ -1,14 +1,14 @@
 variable "name" {
-  description = "Name of the DynamoDB table. Must match the name the TEAM state machines build from the Amplify env parameter, e.g. TEAM-AppStream-RefCount-main"
+  description = "Name of the DynamoDB table. Must match the name the AppStream controller derives from its env, e.g. TEAM-AppStream-RefCount-main"
   type        = string
 
-  # The state machines (in core-cloud-pam-team-app) build this name with Fn::Join on
-  # the Amplify env parameter. Nothing else enforces that the two sides agree, and a
+  # The controller (stepfunctions/appstream_controller) derives this name from its env.
+  # Nothing else enforces that the two sides agree, and a
   # mismatch would fail silently: the UpdateItem calls would target a table that does
   # not exist, so no assignment would ever be reference-counted.
   validation {
     condition     = can(regex("^TEAM-AppStream-RefCount-[A-Za-z0-9-]+$", var.name))
-    error_message = "name must be of the form TEAM-AppStream-RefCount-<env>, matching the name the TEAM state machines construct from the Amplify env parameter."
+    error_message = "name must be of the form TEAM-AppStream-RefCount-<env>, matching the name the AppStream controller derives from its env."
   }
 }
 
