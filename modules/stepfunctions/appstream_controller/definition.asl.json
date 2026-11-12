@@ -355,7 +355,7 @@
                         },
                         "V: account access": {
                           "Type": "Task",
-                          "Comment": "The account assignment TEAM created for this session must still exist. TEAM deletes the shared assignment when one of two overlapping sessions on the same account and permission set ends, so the other has lost access too.",
+                          "Comment": "The account assignment TEAM created for this session must still exist. TEAM deletes the shared assignment when one of two overlapping sessions on the same account and permission set ends, so the other has lost access too. A deleted permission set or account means no access either.",
                           "Resource": "arn:aws:states:::aws-sdk:ssoadmin:listAccountAssignments",
                           "Arguments": "{% $merge([{'InstanceArn': '${instance_arn}', 'AccountId': $sessionGrant.accountId, 'PermissionSetArn': $sessionGrant.roleId, 'MaxResults': 100}, $accessKey != null ? {'NextToken': $accessKey} : {}]) %}",
                           "Retry": [
@@ -373,7 +373,6 @@
                               "ErrorEquals": [
                                 "SsoAdmin.ResourceNotFoundException"
                               ],
-                              "Comment": "The permission set or account has gone, so the session has no access either.",
                               "Next": "V: no"
                             }
                           ],
