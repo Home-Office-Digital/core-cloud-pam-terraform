@@ -177,7 +177,8 @@
                       "managed": "",
                       "rev": 0,
                       "pendingDelete": false,
-                      "ledgerRead": false
+                      "ledgerRead": false,
+                      "settled": false
                     },
                     "Next": "R: principal known for hint?"
                   },
@@ -213,7 +214,7 @@
                           "Type": "Pass",
                           "Assign": {
                             "item": "{% $states.input %}",
-                            "attempt": 0,
+                               "attempt": 0,
                             "accessFound": false,
                             "accessKey": null,
                             "accessAttempt": 0
@@ -365,6 +366,15 @@
                               "IntervalSeconds": 2,
                               "BackoffRate": 2,
                               "MaxAttempts": 4
+                            }
+                          ],
+                          "Catch": [
+                            {
+                              "ErrorEquals": [
+                                "SsoAdmin.ResourceNotFoundException"
+                              ],
+                              "Comment": "The permission set or account has gone, so the session has no access either.",
+                              "Next": "V: no"
                             }
                           ],
                           "Assign": {
@@ -569,11 +579,19 @@
                     "Comment": "The triggering session ended but others are still active. TEAM's delete of a shared account assignment may not have finished, so look once more before keeping access.",
                     "Choices": [
                       {
-                        "Condition": "{% $pass = 1 and $type($target.triggerId) = 'string' and $not($target.triggerId in $activeIds) %}",
-                        "Next": "R: settle wait"
+                        "Condition": "{% $not($settled) and $type($target.triggerId) = 'string' and $not($target.triggerId in $activeIds) %}",
+                        "Next": "R: settle"
                       }
                     ],
                     "Default": "R: report"
+                  },
+                  "R: settle": {
+                    "Type": "Pass",
+                    "Comment": "Once per target, tracked apart from the pass count so a lost lock cannot use it up.",
+                    "Assign": {
+                      "settled": true
+                    },
+                    "Next": "R: settle wait"
                   },
                   "R: settle wait": {
                     "Type": "Wait",
