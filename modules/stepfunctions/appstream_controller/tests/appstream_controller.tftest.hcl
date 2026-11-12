@@ -31,6 +31,7 @@ mock_provider "aws" {
 
 variables {
   requests_table_name = "requests-abc123-main"
+  instance_arn        = "arn:aws:sso:::instance/ssoins-0123456789abcdef"
 }
 
 override_data {
@@ -89,6 +90,11 @@ run "safe_by_default" {
   }
 
   assert {
+    condition     = strcontains(aws_sfn_state_machine.controller.definition, "aws-sdk:ssoadmin:listAccountAssignments") && strcontains(aws_sfn_state_machine.controller.definition, "'InstanceArn': 'arn:aws:sso:::instance/ssoins-0123456789abcdef'")
+    error_message = "A session must only count while its TEAM account assignment exists, checked in the configured instance."
+  }
+
+  assert {
     condition     = jsondecode(aws_sfn_state_machine.controller.definition).States.Start.Assign.dryRun == true
     error_message = "dry_run must default to true."
   }
@@ -142,9 +148,19 @@ run "least_privilege" {
     condition = alltrue([
       for s in jsondecode(aws_iam_role_policy.state_machine.policy).Statement :
       s.Condition == { StringEquals = { "aws:ResourceTag/team-appstream-managed" = "true" } }
-      if length([for a in s.Action : a if startswith(a, "sso:")]) > 0
+      if length([for a in s.Action : a if strcontains(a, "ApplicationAssignment")]) > 0
     ])
     error_message = "Application assignment actions must be limited to applications tagged team-appstream-managed=true."
+  }
+
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.state_machine.policy).Statement : s if s.Sid == "ReadTeamAccountAssignments"]).Action == ["sso:ListAccountAssignments"] && one([for s in jsondecode(aws_iam_role_policy.state_machine.policy).Statement : s if s.Sid == "ReadTeamAccountAssignments"]).Resource == ["arn:aws:sso:::instance/ssoins-0123456789abcdef", "arn:aws:sso:::permissionSet/ssoins-0123456789abcdef/*", "arn:aws:sso:::account/*"]
+    error_message = "Account assignments may only be listed, and only in the TEAM instance."
+  }
+
+  assert {
+    condition     = length(flatten([for s in jsondecode(aws_iam_role_policy.state_machine.policy).Statement : [for a in s.Action : a if startswith(a, "sso:")]])) == 4
+    error_message = "The controller's only IdC actions are the three tagged application assignment actions and ListAccountAssignments."
   }
 
   assert {
@@ -239,4 +255,14 @@ run "rejects_wrong_requests_table" {
   }
 
   expect_failures = [var.requests_table_name]
+}
+
+run "rejects_wrong_instance_arn" {
+  command = plan
+
+  variables {
+    instance_arn = "arn:aws:sso::217442266296:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+  }
+
+  expect_failures = [var.instance_arn]
 }

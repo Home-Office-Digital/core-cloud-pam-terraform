@@ -27,6 +27,15 @@ variable "requests_table_name" {
   }
 }
 
+variable "instance_arn" {
+  description = "IAM Identity Center instance TEAM grants in, e.g. arn:aws:sso:::instance/ssoins-0123456789abcdef. Used to check a session's account assignment still exists."
+  type        = string
+  validation {
+    condition     = can(regex("^arn:aws:sso:::instance/ssoins-[a-zA-Z0-9-.]{16}$", var.instance_arn))
+    error_message = "instance_arn must be an IAM Identity Center instance ARN, arn:aws:sso:::instance/ssoins-<16 characters>."
+  }
+}
+
 variable "dry_run" {
   description = "Report intended actions without creating or deleting assignments or writing the ledger"
   type        = bool
