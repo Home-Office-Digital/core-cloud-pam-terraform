@@ -213,7 +213,10 @@
                           "Type": "Pass",
                           "Assign": {
                             "item": "{% $states.input %}",
-                            "attempt": 0
+                            "attempt": 0,
+                            "accessFound": false,
+                            "accessKey": null,
+                            "accessAttempt": 0
                           },
                           "Next": "V: Schedule run"
                         },
@@ -343,11 +346,64 @@
                           "Type": "Choice",
                           "Choices": [
                             {
-                              "Condition": "{% $app = $item.applicationArn %}",
-                              "Next": "V: yes"
+                              "Condition": "{% $app = $item.applicationArn and $type($sessionGrant.roleId) = 'string' and $substring($sessionGrant.roleId, 0, 28) = 'arn:aws:sso:::permissionSet/' %}",
+                              "Next": "V: account access"
                             }
                           ],
                           "Default": "V: no"
+                        },
+                        "V: account access": {
+                          "Type": "Task",
+                          "Comment": "The account assignment TEAM created for this session must still exist. TEAM deletes the shared assignment when one of two overlapping sessions on the same account and permission set ends, so the other has lost access too.",
+                          "Resource": "arn:aws:states:::aws-sdk:ssoadmin:listAccountAssignments",
+                          "Arguments": "{% $merge([{'InstanceArn': '${instance_arn}', 'AccountId': $sessionGrant.accountId, 'PermissionSetArn': $sessionGrant.roleId, 'MaxResults': 100}, $accessKey != null ? {'NextToken': $accessKey} : {}]) %}",
+                          "Retry": [
+                            {
+                              "ErrorEquals": [
+                                "SsoAdmin.ThrottlingException"
+                              ],
+                              "IntervalSeconds": 2,
+                              "BackoffRate": 2,
+                              "MaxAttempts": 4
+                            }
+                          ],
+                          "Assign": {
+                            "accessFound": "{% $accessFound or $count($states.result.AccountAssignments[PrincipalType = 'USER' and PrincipalId = $sessionGrant.userId]) > 0 %}",
+                            "accessKey": "{% $exists($states.result.NextToken) and $states.result.NextToken != '' ? $states.result.NextToken : null %}"
+                          },
+                          "Next": "V: access?"
+                        },
+                        "V: access?": {
+                          "Type": "Choice",
+                          "Comment": "Every page is read. A new assignment can take a few seconds to provision, so look again briefly before deciding it has gone.",
+                          "Choices": [
+                            {
+                              "Condition": "{% $accessFound %}",
+                              "Next": "V: yes"
+                            },
+                            {
+                              "Condition": "{% $accessKey != null %}",
+                              "Next": "V: account access"
+                            },
+                            {
+                              "Condition": "{% $accessAttempt < 3 %}",
+                              "Next": "V: access retry"
+                            }
+                          ],
+                          "Default": "V: no"
+                        },
+                        "V: access retry": {
+                          "Type": "Pass",
+                          "Assign": {
+                            "accessAttempt": "{% $accessAttempt + 1 %}",
+                            "accessKey": null
+                          },
+                          "Next": "V: access pause"
+                        },
+                        "V: access pause": {
+                          "Type": "Wait",
+                          "Seconds": 10,
+                          "Next": "V: account access"
                         },
                         "V: yes": {
                           "Type": "Pass",
@@ -498,7 +554,7 @@
                       },
                       "ConditionExpression": "attribute_not_exists(rev) OR rev = :rev"
                     },
-                    "Next": "R: report",
+                    "Next": "R: settle?",
                     "Catch": [
                       {
                         "ErrorEquals": [
@@ -507,6 +563,22 @@
                         "Next": "R: again?"
                       }
                     ]
+                  },
+                  "R: settle?": {
+                    "Type": "Choice",
+                    "Comment": "The triggering session ended but others are still active. TEAM's delete of a shared account assignment may not have finished, so look once more before keeping access.",
+                    "Choices": [
+                      {
+                        "Condition": "{% $pass = 1 and $type($target.triggerId) = 'string' and $not($target.triggerId in $activeIds) %}",
+                        "Next": "R: settle wait"
+                      }
+                    ],
+                    "Default": "R: report"
+                  },
+                  "R: settle wait": {
+                    "Type": "Wait",
+                    "Seconds": 15,
+                    "Next": "R: second pass"
                   },
                   "R: record preexisting": {
                     "Type": "Task",

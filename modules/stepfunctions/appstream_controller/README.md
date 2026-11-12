@@ -21,6 +21,13 @@ EventBridge Scheduler (sweep) ────┤
   active only if its Schedule run started a Grant run that is RUNNING and in its session
   `Wait`, with no early-revoke run named after the request. `userId` and `accountId` come
   from the Grant run input.
+- **Only while account access exists.** The account assignment TEAM created for the session
+  (account, permission set, user) must still exist. TEAM currently deletes that shared
+  assignment when one of two overlapping sessions on the same account and permission set
+  ends ([aws-samples/iam-identity-center-team#279](https://github.com/aws-samples/iam-identity-center-team/issues/279)),
+  so the other session loses AppStream too. When an ending session leaves others active, the
+  controller looks again 15 seconds later in case TEAM's delete has not finished. Once TEAM
+  keeps the shared assignment, the other session passes this check with no change here.
 - **Matched on the IdC user id.** Usernames can be renamed or reused, so they only find
   candidates. Once a target's user id is known, a session counts only if its Grant run has
   that id, and the ledger's ids are re-checked even when the username has changed.
@@ -37,9 +44,9 @@ EventBridge Scheduler (sweep) ────┤
   treated as ours, so the failure mode is removing access, never leaving it.
 - **Fails closed.** A missing execution, registry row or matching user means no AppStream.
   A failure never affects the TEAM session.
-- **Least privilege.** Read-only on TEAM's executions and the `byStatus` index of the
-  requests table. Application assignments only on applications tagged
-  `team-appstream-managed = true`.
+- **Least privilege.** Read-only on TEAM's executions, the `byStatus` index of the
+  requests table and account assignments in the TEAM instance. Application assignments
+  only on applications tagged `team-appstream-managed = true`.
 - **Audit trail.** Full execution history goes to CloudWatch Logs (`level = ALL`, with
   execution data), encrypted with the module's CMK, alongside X-Ray tracing. The log
   delivery actions have no resource-level support, so that one statement uses
@@ -86,6 +93,7 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 | <a name="input_alarm_actions"></a> [alarm\_actions](#input\_alarm\_actions) | ARNs notified when an alarm changes state, e.g. an SNS topic | `list(string)` | `[]` | no |
 | <a name="input_dry_run"></a> [dry\_run](#input\_dry\_run) | Report intended actions without creating or deleting assignments or writing the ledger | `bool` | `true` | no |
 | <a name="input_env"></a> [env](#input\_env) | Suffix shared with the registry and ref-count tables, e.g. main for TEAM-AppStream-Registry-main | `string` | `"main"` | no |
+| <a name="input_instance_arn"></a> [instance\_arn](#input\_instance\_arn) | IAM Identity Center instance TEAM grants in, e.g. arn:aws:sso:::instance/ssoins-0123456789abcdef. Used to check a session's account assignment still exists. | `string` | n/a | yes |
 | <a name="input_log_retention_days"></a> [log\_retention\_days](#input\_log\_retention\_days) | Retention for the execution log group | `number` | `365` | no |
 | <a name="input_pipe_enabled"></a> [pipe\_enabled](#input\_pipe\_enabled) | Start the pipe. Off by default so a first apply reads nothing from the TEAM stream. | `bool` | `false` | no |
 | <a name="input_requests_table_name"></a> [requests\_table\_name](#input\_requests\_table\_name) | TEAM requests table, e.g. requests-<appsync api id>-main. Its stream drives the pipe. | `string` | n/a | yes |

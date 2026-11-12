@@ -22,8 +22,10 @@ locals {
     requests_table       = var.requests_table_name
     registry_table       = local.registry_table
     ledger_table         = local.ledger_table
+    instance_arn         = var.instance_arn
     dry_run              = var.dry_run
   })
+  instance_id = element(split("/", var.instance_arn), 1)
 
   # Session start and stop statuses only. Everything else is ignored, and a match only
   # prompts a check: the state machine decides from TEAM's executions.
@@ -145,6 +147,17 @@ resource "aws_iam_role_policy" "state_machine" {
         Condition = {
           StringEquals = { "aws:ResourceTag/team-appstream-managed" = "true" }
         }
+      },
+      {
+        # Read only: checks the account assignment TEAM created for a session still exists.
+        Sid    = "ReadTeamAccountAssignments"
+        Effect = "Allow"
+        Action = ["sso:ListAccountAssignments"]
+        Resource = [
+          var.instance_arn,
+          "arn:aws:sso:::permissionSet/${local.instance_id}/*",
+          "arn:aws:sso:::account/*",
+        ]
       },
     ]
   })
