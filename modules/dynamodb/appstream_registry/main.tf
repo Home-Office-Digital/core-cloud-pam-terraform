@@ -37,8 +37,8 @@ locals {
   # Instances keyed by account ID, so renaming an account updates its item in place rather
   # than creating a new instance and destroying the old one against the same row.
   items = {
-    for name, arn in var.applications :
-    (length(lookup(local.account_ids, name, [])) == 1 ? local.account_ids[name][0] : "unresolved:${name}") => { name = name, arn = arn }
+    for name, arns in var.applications :
+    (length(lookup(local.account_ids, name, [])) == 1 ? local.account_ids[name][0] : "unresolved:${name}") => { name = name, arns = arns }
   }
 }
 
@@ -49,9 +49,11 @@ resource "aws_dynamodb_table_item" "application" {
   hash_key   = aws_dynamodb_table.appstream_registry.hash_key
 
   item = jsonencode({
-    accountId      = { S = each.key }
-    accountName    = { S = each.value.name }
-    applicationArn = { S = each.value.arn }
+    accountId       = { S = each.key }
+    accountName     = { S = each.value.name }
+    applicationArns = { SS = sort(each.value.arns) }
+    # The first application, for controllers before 0.17.0, which read a single ARN.
+    applicationArn = { S = each.value.arns[0] }
   })
 
   lifecycle {

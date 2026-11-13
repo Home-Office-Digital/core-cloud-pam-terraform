@@ -1,9 +1,13 @@
 # appstream_registry
 
-Maps a TEAM target account to the IAM Identity Center (AppStream) application its sessions
+Maps a TEAM target account to the IAM Identity Center (AppStream) applications its sessions
 are granted. The AppStream controller (`stepfunctions/appstream_controller`) looks up the
 session's `accountId`: a row means in scope, no row means nothing happens. Adding a tenant is
 a row here, not a change to the shared TEAM app.
+
+- **One or more applications per account.** Each row stores `applicationArns` (a string set)
+  and, for controllers before 0.17.0, `applicationArn` as the first application configured.
+  Those older controllers only grant that first application.
 
 - **Keyed on account ID.** TEAM keeps a client-supplied `accountName` when it cannot resolve
   one, whereas `accountId` is what eligibility and the account assignment use. Config still
@@ -34,7 +38,7 @@ a row here, not a change to the shared TEAM app.
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_applications"></a> [applications](#input\_applications) | Map of TEAM account name to the IdC application ARN its sessions are granted | `map(string)` | n/a | yes |
+| <a name="input_applications"></a> [applications](#input\_applications) | Map of TEAM account name to the IdC application ARNs its sessions are granted. The first ARN is also written as applicationArn for controllers before 0.17.0. | `map(list(string))` | n/a | yes |
 | <a name="input_name"></a> [name](#input\_name) | Table name. Must match the name the AppStream controller derives from its env, e.g. TEAM-AppStream-Registry-main | `string` | n/a | yes |
 | <a name="input_reader_role_arns"></a> [reader\_role\_arns](#input\_reader\_role\_arns) | IAM role ARNs allowed to decrypt the table via DynamoDB without an IAM grant, e.g. the terragrunt plan role. Must already exist. | `list(string)` | `[]` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags to apply to the table | `map(string)` | `{}` | no |

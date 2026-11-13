@@ -95,6 +95,11 @@ run "safe_by_default" {
   }
 
   assert {
+    condition     = length(regexall("\\$exists\\(\\$i\\.applicationArns\\.SS\\)", aws_sfn_state_machine.controller.definition)) == 3
+    error_message = "The event path, the session check and the sweep must all read every application on a registry row."
+  }
+
+  assert {
     condition     = jsondecode(aws_sfn_state_machine.controller.definition).States.Start.Assign.dryRun == true
     error_message = "dry_run must default to true."
   }

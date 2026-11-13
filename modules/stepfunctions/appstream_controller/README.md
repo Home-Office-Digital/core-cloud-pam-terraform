@@ -11,7 +11,7 @@ EventBridge Scheduler (sweep) ────┤
                                   ▼
                          Controller state machine
           1. Verify each session against TEAM's own executions
-          2. Registry: accountId → application   (no row → nothing to do)
+          2. Registry: accountId → applications  (no row → nothing to do)
           3. Ledger (appstream_refcount): active request ids, owned or preexisting
           4. Create or delete the USER assignment to match
 ```
@@ -28,6 +28,9 @@ EventBridge Scheduler (sweep) ────┤
   so the other session loses AppStream too. When an ending session leaves others active, the
   controller looks again 15 seconds later in case TEAM's delete has not finished. Once TEAM
   keeps the shared assignment, the other session passes this check with no change here.
+- **One account, several applications.** A registry row can list more than one
+  application (`applicationArns`), and each is managed separately with its own ledger row.
+  Rows from registry releases before 0.17.0, with only `applicationArn`, still work.
 - **Matched on the IdC user id.** Usernames can be renamed or reused, so they only find
   candidates. Once a target's user id is known, a session counts only if its Grant run has
   that id, and the ledger's ids are re-checked even when the username has changed.
