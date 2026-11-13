@@ -9,12 +9,17 @@ variable "name" {
 }
 
 variable "applications" {
-  description = "Map of TEAM account name to the IdC application ARN its sessions are granted"
-  type        = map(string)
+  description = "Map of TEAM account name to the IdC application ARNs its sessions are granted. The first ARN is also written as applicationArn for controllers before 0.17.0."
+  type        = map(list(string))
+
+  validation {
+    condition     = alltrue([for arns in values(var.applications) : length(arns) > 0 && length(distinct(arns)) == length(arns)])
+    error_message = "Every account needs at least one application ARN, with no duplicates."
+  }
 
   validation {
     # Mirrors the ApplicationArn pattern in the CreateApplicationAssignment API reference.
-    condition     = alltrue([for arn in values(var.applications) : can(regex("^arn:aws(-[a-z]{1,5}){0,3}:sso::[0-9]{12}:application/(sso)?ins-[a-zA-Z0-9.-]{16}/apl-[a-zA-Z0-9]{16}$", arn))])
+    condition     = alltrue([for arn in flatten(values(var.applications)) : can(regex("^arn:aws(-[a-z]{1,5}){0,3}:sso::[0-9]{12}:application/(sso)?ins-[a-zA-Z0-9.-]{16}/apl-[a-zA-Z0-9]{16}$", arn))])
     error_message = "Every value must be an IdC application ARN, with 16-character instance and application IDs."
   }
 }

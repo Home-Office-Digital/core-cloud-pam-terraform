@@ -5,8 +5,8 @@ mock_provider "aws" {}
 variables {
   name = "TEAM-AppStream-Registry-test"
   applications = {
-    "APC-PR-Prod-WL-Account-1" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
-    "APC-PR-Prod-WL-Account-2" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+    "APC-PR-Prod-WL-Account-1" = ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
+    "APC-PR-Prod-WL-Account-2" = ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
   }
 }
 
@@ -67,8 +67,13 @@ run "design_constraints" {
   }
 
   assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["222222222222"].item).applicationArns.SS == ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
+    error_message = "Items must carry their applications as a string set."
+  }
+
+  assert {
     condition     = jsondecode(aws_dynamodb_table_item.application["222222222222"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
-    error_message = "Items must carry applicationArn as a string attribute."
+    error_message = "Items must still carry applicationArn, for controllers before 0.17.0."
   }
 
   # kms_key_arn is optional, so dropping it would silently fall back to the AWS managed key.
@@ -129,13 +134,72 @@ run "reader_grant_is_read_only_and_dynamodb_only" {
   }
 }
 
+# An account can grant more than one application, e.g. Tooling gets both APC apps.
+run "maps_an_account_to_several_applications" {
+  command = apply
+
+  variables {
+    applications = {
+      "APC-PR-Prod-WL-Account-1" = [
+        "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-bbbbbbbbbbbbbbbb",
+        "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-aaaaaaaaaaaaaaaa",
+      ]
+    }
+  }
+
+  override_resource {
+    target = aws_kms_key.appstream_registry
+    values = {
+      arn    = "arn:aws:kms:eu-west-2:111122223333:key/test-key-id"
+      key_id = "test-key-id"
+    }
+  }
+
+  assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).applicationArns.SS == ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-aaaaaaaaaaaaaaaa", "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-bbbbbbbbbbbbbbbb"]
+    error_message = "Every application must be stored, sorted so the plan is stable."
+  }
+
+  assert {
+    condition     = jsondecode(aws_dynamodb_table_item.application["111111111111"].item).applicationArn.S == "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-bbbbbbbbbbbbbbbb"
+    error_message = "applicationArn must be the first application as configured."
+  }
+}
+
+run "rejects_account_with_no_application" {
+  command = plan
+
+  variables {
+    applications = {
+      "APC-PR-Prod-WL-Account-1" = []
+    }
+  }
+
+  expect_failures = [var.applications]
+}
+
+run "rejects_duplicate_application" {
+  command = plan
+
+  variables {
+    applications = {
+      "APC-PR-Prod-WL-Account-1" = [
+        "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef",
+        "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef",
+      ]
+    }
+  }
+
+  expect_failures = [var.applications]
+}
+
 # A typo must fail the plan, not write a row that never matches.
 run "rejects_unknown_account_name" {
   command = plan
 
   variables {
     applications = {
-      "APC-PR-Prod-WL-Acount-1" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+      "APC-PR-Prod-WL-Acount-1" = ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
     }
   }
 
@@ -148,7 +212,7 @@ run "rejects_ambiguous_account_name" {
 
   variables {
     applications = {
-      "Duplicated-Name" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+      "Duplicated-Name" = ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
     }
   }
 
@@ -161,7 +225,7 @@ run "rejects_suspended_account" {
 
   variables {
     applications = {
-      "Suspended-Account" = "arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"
+      "Suspended-Account" = ["arn:aws:sso::111122223333:application/ssoins-0123456789abcdef/apl-0123456789abcdef"]
     }
   }
 
@@ -184,7 +248,7 @@ run "rejects_malformed_application_arn" {
   # Well-shaped but with IDs shorter than the 16 characters AWS requires.
   variables {
     applications = {
-      "APC-PR-Prod-WL-Account-1" = "arn:aws:sso::111122223333:application/ssoins-a/apl-b"
+      "APC-PR-Prod-WL-Account-1" = ["arn:aws:sso::111122223333:application/ssoins-a/apl-b"]
     }
   }
 

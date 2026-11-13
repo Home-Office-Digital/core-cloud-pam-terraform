@@ -100,7 +100,7 @@
         }
       },
       "Assign": {
-        "targets": "{% $exists($states.result.Item) and $exists($grant.userId) ? [{ 'userId': $grant.userId, 'username': $grant.username, 'applicationArn': $states.result.Item.applicationArn.S, 'triggerId': $requestId }] : [] %}"
+        "targets": "{% ( $i := $states.result.Item; $apps := $exists($i.applicationArns.SS) ? $i.applicationArns.SS : ($exists($i.applicationArn.S) ? [$i.applicationArn.S] : []); $exists($i) and $exists($grant.userId) ? $append([], $apps.{ 'userId': $grant.userId, 'username': $grant.username, 'applicationArn': $, 'triggerId': $requestId }) : [] ) %}"
       },
       "Next": "Reconcile"
     },
@@ -139,7 +139,7 @@
       "Type": "Pass",
       "Comment": "One target per managed ledger row, so every tracked principal is re-checked. Requests not already tracked by a ledger row get their own targets, grouped by username and application but limited to those untracked ids, so a reused username cannot hide a new principal behind an old one. Each target carries its candidate request ids from the sweep's query.",
       "Assign": {
-        "targets": "{% ( $reg := $merge($append([{}], $registryItems.{ accountId.S: applicationArn.S })); $ids := function($u, $a) { $append([], $rows[username.S = $u and $lookup($reg, accountId.S) = $a].id.S) }; $tracked := $append([], $ledgerItems.activeRequestIds.SS); $fromLedger := $append([], $ledgerItems[managed.S = 'owned' or $exists(activeRequestIds)].{ 'username': username.S, 'userId': principalId.S, 'applicationArn': applicationArn.S }); $untracked := $append([], $rows[$type(username.S) = 'string' and $exists($lookup($reg, accountId.S)) and $not(id.S in $tracked)]); $fromRequests := $append([], $untracked.{ 'username': username.S, 'userId': '', 'applicationArn': $lookup($reg, accountId.S), 'id': id.S }); $newKeys := $append([], $distinct($fromRequests.(username & '|' & applicationArn))); $append($append([], $fromLedger.$merge([$, { 'candidateIds': $ids(username, applicationArn) }])), $append([], $newKeys.( $k := $; $g := $fromRequests[(username & '|' & applicationArn) = $k]; $t := $g[0]; { 'username': $t.username, 'userId': '', 'applicationArn': $t.applicationArn, 'candidateIds': $append([], $g.id) } ))) ) %}"
+        "targets": "{% ( $appsOf := function($i) { $exists($i.applicationArns.SS) ? $i.applicationArns.SS : ($exists($i.applicationArn.S) ? [$i.applicationArn.S] : []) }; $reg := $merge($append([{}], $registryItems.{ accountId.S: $appsOf($) })); $appsFor := function($a) { $append([], $lookup($reg, $a)) }; $ids := function($u, $a) { $append([], $rows[username.S = $u and $a in $appsFor(accountId.S)].id.S) }; $trackedFor := function($a) { $append([], $ledgerItems[applicationArn.S = $a].activeRequestIds.SS) }; $fromLedger := $append([], $ledgerItems[managed.S = 'owned' or $exists(activeRequestIds)].{ 'username': username.S, 'userId': principalId.S, 'applicationArn': applicationArn.S }); $pairs := $append([], $rows[$type(username.S) = 'string'].( $r := $; $appsFor($r.accountId.S).{ 'username': $r.username.S, 'userId': '', 'applicationArn': $, 'id': $r.id.S } )); $fromRequests := $append([], $pairs[$not(id in $trackedFor(applicationArn))]); $newKeys := $append([], $distinct($fromRequests.(username & '|' & applicationArn))); $append($append([], $fromLedger.$merge([$, { 'candidateIds': $ids(username, applicationArn) }])), $append([], $newKeys.( $k := $; $g := $fromRequests[(username & '|' & applicationArn) = $k]; $t := $g[0]; { 'username': $t.username, 'userId': '', 'applicationArn': $t.applicationArn, 'candidateIds': $append([], $g.id) } ))) ) %}"
       },
       "Next": "Reconcile"
     },
@@ -339,7 +339,7 @@
                             }
                           },
                           "Assign": {
-                            "app": "{% $exists($states.result.Item) ? $states.result.Item.applicationArn.S : '' %}"
+                            "appMatch": "{% ( $i := $states.result.Item; $apps := $exists($i.applicationArns.SS) ? $i.applicationArns.SS : ($exists($i.applicationArn.S) ? [$i.applicationArn.S] : []); $item.applicationArn in $apps ) %}"
                           },
                           "Next": "V: same application?"
                         },
@@ -347,7 +347,7 @@
                           "Type": "Choice",
                           "Choices": [
                             {
-                              "Condition": "{% $app = $item.applicationArn and $type($sessionGrant.roleId) = 'string' and $substring($sessionGrant.roleId, 0, 28) = 'arn:aws:sso:::permissionSet/' %}",
+                              "Condition": "{% $appMatch = true and $type($sessionGrant.roleId) = 'string' and $substring($sessionGrant.roleId, 0, 28) = 'arn:aws:sso:::permissionSet/' %}",
                               "Next": "V: account access"
                             }
                           ],
