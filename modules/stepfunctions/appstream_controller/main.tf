@@ -434,7 +434,7 @@ resource "aws_iam_role_policy" "scheduler" {
 
 resource "aws_cloudwatch_metric_alarm" "executions_failed" {
   alarm_name          = "${local.name}-executions-failed"
-  alarm_description   = "AppStream controller runs failed. The next sweep retries, but repeated failures leave AppStream out of step with TEAM sessions."
+  alarm_description   = "At least one controller run failed, so someone may not have got, or lost, their AppStream tile. The 5-minute check tries again (TEAM-RB-0007, section 3)."
   namespace           = "AWS/States"
   metric_name         = "ExecutionsFailed"
   dimensions          = { StateMachineArn = aws_sfn_state_machine.controller.arn }
@@ -451,7 +451,7 @@ resource "aws_cloudwatch_metric_alarm" "executions_failed" {
 
 resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
   alarm_name          = "${local.name}-dlq-not-empty"
-  alarm_description   = "Stream records the pipe could not deliver. The sweep covers them, but the cause needs a look."
+  alarm_description   = "Some TEAM request changes did not reach the controller. The 5-minute check should still put people's AppStream access right, but find out why (TEAM-RB-0007, section 4)."
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
   dimensions          = { QueueName = aws_sqs_queue.dlq.name }
