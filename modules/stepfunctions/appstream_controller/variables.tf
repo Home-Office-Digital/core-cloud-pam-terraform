@@ -61,9 +61,19 @@ variable "sweep_schedule" {
 }
 
 variable "alarm_actions" {
-  description = "ARNs notified when an alarm changes state, e.g. an SNS topic"
+  description = "Extra ARNs notified when an alarm changes state. The module's own alarms topic is always notified."
   type        = list(string)
   default     = []
+}
+
+variable "alarm_notification_lambda_arn" {
+  description = "Lambda subscribed to the alarms topic, e.g. the function that posts to Slack. Null for no subscriber."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.alarm_notification_lambda_arn == null || can(regex("^arn:aws:lambda:[a-z0-9-]+:[0-9]{12}:function:[A-Za-z0-9_-]+$", var.alarm_notification_lambda_arn))
+    error_message = "alarm_notification_lambda_arn must be an unqualified Lambda function ARN, arn:aws:lambda:<region>:<account>:function:<name>."
+  }
 }
 
 variable "log_retention_days" {
