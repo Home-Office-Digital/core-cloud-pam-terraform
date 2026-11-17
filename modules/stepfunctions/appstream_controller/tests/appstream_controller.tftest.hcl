@@ -26,6 +26,11 @@ mock_provider "aws" {
       key_id = "controller"
     }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-west-2:111122223333:TEAM-AppStream-Controller-main-alarms"
+    }
+  }
 }
 # Consumers run Terraform 1.9.3 and validate tests/ on init - keep to syntax it supports.
 
@@ -250,6 +255,69 @@ run "plan_role_can_read_the_schedule" {
     condition     = one([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow readers to decrypt the schedule payload"]).Action == ["kms:Decrypt", "kms:DescribeKey"]
     error_message = "Readers may only decrypt and describe the key."
   }
+}
+
+run "alarms_notify_their_topic" {
+  command = apply
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.executions_failed.alarm_actions == toset([aws_sns_topic.alarms.arn]) && aws_cloudwatch_metric_alarm.executions_failed.ok_actions == toset([aws_sns_topic.alarms.arn]) && aws_cloudwatch_metric_alarm.dlq_not_empty.alarm_actions == toset([aws_sns_topic.alarms.arn]) && aws_cloudwatch_metric_alarm.dlq_not_empty.ok_actions == toset([aws_sns_topic.alarms.arn])
+    error_message = "Both alarms must notify the alarms topic when they go off and when they clear."
+  }
+
+  assert {
+    condition     = aws_sns_topic.alarms.name == "TEAM-AppStream-Controller-main-alarms" && aws_sns_topic.alarms.kms_master_key_id == aws_kms_key.controller.arn
+    error_message = "The alarms topic must use the module's CMK. CloudWatch cannot publish to a topic on the AWS managed SNS key."
+  }
+
+  assert {
+    condition     = jsondecode(aws_sns_topic_policy.alarms.policy).Statement == [{ Sid = "AllowThisControllersAlarmsToPublish", Effect = "Allow", Principal = { Service = "cloudwatch.amazonaws.com" }, Action = "sns:Publish", Resource = "arn:aws:sns:eu-west-2:111122223333:TEAM-AppStream-Controller-main-alarms", Condition = { StringEquals = { "aws:SourceAccount" = "111122223333" }, ArnLike = { "aws:SourceArn" = "arn:aws:cloudwatch:eu-west-2:111122223333:alarm:TEAM-AppStream-Controller-main-*" } } }]
+    error_message = "Only this controller's alarms may publish to the topic."
+  }
+
+  assert {
+    condition     = one([for s in jsondecode(aws_kms_key_policy.controller.policy).Statement : s if s.Sid == "Allow this controller's alarms to publish to the alarms topic"]) == { Sid = "Allow this controller's alarms to publish to the alarms topic", Effect = "Allow", Principal = { Service = "cloudwatch.amazonaws.com" }, Action = ["kms:Decrypt", "kms:GenerateDataKey*"], Resource = "arn:aws:kms:eu-west-2:111122223333:key/controller", Condition = { StringEquals = { "aws:SourceAccount" = "111122223333" }, ArnLike = { "aws:SourceArn" = "arn:aws:cloudwatch:eu-west-2:111122223333:alarm:TEAM-AppStream-Controller-main-*" } } }
+    error_message = "CloudWatch may only use the key for this controller's alarms."
+  }
+
+  assert {
+    condition     = length(aws_sns_topic_subscription.alarms_lambda) == 0 && length(aws_lambda_permission.alarms) == 0
+    error_message = "No subscriber may be created when alarm_notification_lambda_arn is null."
+  }
+}
+
+run "alarms_reach_the_lambda" {
+  command = apply
+
+  variables {
+    alarm_notification_lambda_arn = "arn:aws:lambda:eu-west-2:111122223333:function:TEAM-SNS-handler"
+    alarm_actions                 = ["arn:aws:sns:eu-west-2:111122223333:extra"]
+  }
+
+  assert {
+    condition     = aws_sns_topic_subscription.alarms_lambda[0].protocol == "lambda" && aws_sns_topic_subscription.alarms_lambda[0].endpoint == "arn:aws:lambda:eu-west-2:111122223333:function:TEAM-SNS-handler" && aws_sns_topic_subscription.alarms_lambda[0].topic_arn == aws_sns_topic.alarms.arn
+    error_message = "The Lambda must be subscribed to the alarms topic."
+  }
+
+  assert {
+    condition     = aws_lambda_permission.alarms[0].principal == "sns.amazonaws.com" && aws_lambda_permission.alarms[0].source_arn == aws_sns_topic.alarms.arn && aws_lambda_permission.alarms[0].action == "lambda:InvokeFunction" && aws_lambda_permission.alarms[0].statement_id == "AllowExecutionFromTEAMAppStreamControllermainAlarms"
+    error_message = "SNS may invoke the Lambda only from the alarms topic, under a statement id that does not clash with the Lambda's own."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.executions_failed.alarm_actions == toset([aws_sns_topic.alarms.arn, "arn:aws:sns:eu-west-2:111122223333:extra"])
+    error_message = "Extra alarm_actions must be notified as well as the alarms topic."
+  }
+}
+
+run "rejects_wrong_lambda_arn" {
+  command = plan
+
+  variables {
+    alarm_notification_lambda_arn = "TEAM-SNS-handler"
+  }
+
+  expect_failures = [var.alarm_notification_lambda_arn]
 }
 
 run "rejects_wrong_requests_table" {

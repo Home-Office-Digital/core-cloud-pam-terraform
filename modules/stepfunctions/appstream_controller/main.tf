@@ -27,6 +27,11 @@ locals {
   })
   instance_id = element(split("/", var.instance_arn), 1)
 
+  # This controller's alarms only. Built from the name, not the alarm resources, so the key
+  # and topic policies do not depend on the alarms that depend on the topic.
+  alarm_arn_pattern = "arn:aws:cloudwatch:${local.region}:${local.account_id}:alarm:${local.name}-*"
+  alarm_actions     = concat([aws_sns_topic.alarms.arn], var.alarm_actions)
+
   # Session start and stop statuses only. Everything else is ignored, and a match only
   # prompts a check: the state machine decides from TEAM's executions.
   pipe_filter = {
@@ -250,7 +255,20 @@ resource "aws_kms_key_policy" "controller" {
         Principal = { AWS = var.reader_role_arns }
         Action    = ["kms:Decrypt", "kms:DescribeKey"]
         Resource  = aws_kms_key.controller.arn
-    }] : [])
+      }] : [],
+      # CloudWatch needs the key to publish to the encrypted alarms topic. Without this the
+      # alarm action fails, because an AWS managed key cannot be given to CloudWatch.
+      [{
+        Sid       = "Allow this controller's alarms to publish to the alarms topic"
+        Effect    = "Allow"
+        Principal = { Service = "cloudwatch.amazonaws.com" }
+        Action    = ["kms:Decrypt", "kms:GenerateDataKey*"]
+        Resource  = aws_kms_key.controller.arn
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = local.account_id }
+          ArnLike      = { "aws:SourceArn" = local.alarm_arn_pattern }
+        }
+    }])
   })
 }
 
@@ -426,8 +444,8 @@ resource "aws_cloudwatch_metric_alarm" "executions_failed" {
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
-  alarm_actions       = var.alarm_actions
-  ok_actions          = var.alarm_actions
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
   tags                = var.tags
 }
 
@@ -443,7 +461,53 @@ resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
-  alarm_actions       = var.alarm_actions
-  ok_actions          = var.alarm_actions
+  alarm_actions       = local.alarm_actions
+  ok_actions          = local.alarm_actions
   tags                = var.tags
+}
+
+# ---------------------------------------------------------------------------------------
+# Alarm notifications: alarms -> encrypted topic -> optional Lambda (e.g. a Slack poster)
+# ---------------------------------------------------------------------------------------
+
+resource "aws_sns_topic" "alarms" {
+  name              = "${local.name}-alarms"
+  kms_master_key_id = aws_kms_key.controller.arn
+  tags              = var.tags
+}
+
+resource "aws_sns_topic_policy" "alarms" {
+  arn = aws_sns_topic.alarms.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowThisControllersAlarmsToPublish"
+      Effect    = "Allow"
+      Principal = { Service = "cloudwatch.amazonaws.com" }
+      Action    = "sns:Publish"
+      Resource  = aws_sns_topic.alarms.arn
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+        ArnLike      = { "aws:SourceArn" = local.alarm_arn_pattern }
+      }
+    }]
+  })
+}
+
+resource "aws_sns_topic_subscription" "alarms_lambda" {
+  count     = var.alarm_notification_lambda_arn == null ? 0 : 1
+  topic_arn = aws_sns_topic.alarms.arn
+  protocol  = "lambda"
+  endpoint  = var.alarm_notification_lambda_arn
+
+  depends_on = [aws_lambda_permission.alarms]
+}
+
+resource "aws_lambda_permission" "alarms" {
+  count         = var.alarm_notification_lambda_arn == null ? 0 : 1
+  statement_id  = "AllowExecutionFrom${replace(local.name, "-", "")}Alarms"
+  action        = "lambda:InvokeFunction"
+  function_name = var.alarm_notification_lambda_arn
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.alarms.arn
 }

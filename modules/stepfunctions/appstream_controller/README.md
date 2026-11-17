@@ -56,6 +56,12 @@ EventBridge Scheduler (sweep) ────┤
   `Resource "*"`; every other statement is scoped.
 - **Safe first apply.** `dry_run`, a stopped pipe and a disabled sweep are the defaults.
   A dry run reports the intended `action` for each target and changes nothing.
+- **Alarm notifications.** Both alarms notify the module's `-alarms` SNS topic when they go
+  off and when they clear. The topic uses the module's CMK, because CloudWatch cannot
+  publish to a topic on the AWS managed SNS key, and only this controller's alarms may
+  publish to it. Set `alarm_notification_lambda_arn` to subscribe a Lambda, for example
+  one that posts to Slack. It receives the standard CloudWatch alarm message
+  (`AlarmName`, `NewStateValue`, `NewStateReason`, `StateChangeTime`).
 
 Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 `{"mode": "sweep"}`.
@@ -79,9 +85,13 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 | [aws_kms_alias.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
 | [aws_kms_key.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
 | [aws_kms_key_policy.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key_policy) | resource |
+| [aws_lambda_permission.alarms](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/lambda_permission) | resource |
 | [aws_pipes_pipe.requests](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/pipes_pipe) | resource |
 | [aws_scheduler_schedule.sweep](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/scheduler_schedule) | resource |
 | [aws_sfn_state_machine.controller](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sfn_state_machine) | resource |
+| [aws_sns_topic.alarms](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic) | resource |
+| [aws_sns_topic_policy.alarms](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_policy) | resource |
+| [aws_sns_topic_subscription.alarms_lambda](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sns_topic_subscription) | resource |
 | [aws_sqs_queue.dlq](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/sqs_queue) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
 | [aws_dynamodb_table.requests](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table) | data source |
@@ -93,7 +103,8 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| <a name="input_alarm_actions"></a> [alarm\_actions](#input\_alarm\_actions) | ARNs notified when an alarm changes state, e.g. an SNS topic | `list(string)` | `[]` | no |
+| <a name="input_alarm_actions"></a> [alarm\_actions](#input\_alarm\_actions) | Extra ARNs notified when an alarm changes state. The module's own alarms topic is always notified. | `list(string)` | `[]` | no |
+| <a name="input_alarm_notification_lambda_arn"></a> [alarm\_notification\_lambda\_arn](#input\_alarm\_notification\_lambda\_arn) | Lambda subscribed to the alarms topic, e.g. the function that posts to Slack. Null for no subscriber. | `string` | `null` | no |
 | <a name="input_dry_run"></a> [dry\_run](#input\_dry\_run) | Report intended actions without creating or deleting assignments or writing the ledger | `bool` | `true` | no |
 | <a name="input_env"></a> [env](#input\_env) | Suffix shared with the registry and ref-count tables, e.g. main for TEAM-AppStream-Registry-main | `string` | `"main"` | no |
 | <a name="input_instance_arn"></a> [instance\_arn](#input\_instance\_arn) | IAM Identity Center instance TEAM grants in, e.g. arn:aws:sso:::instance/ssoins-0123456789abcdef. Used to check a session's account assignment still exists. | `string` | n/a | yes |
@@ -110,5 +121,6 @@ Manual test: start an execution with `{"requestId": "<TEAM request id>"}`, or
 
 | Name | Description |
 |------|-------------|
+| <a name="output_alarms_topic_arn"></a> [alarms\_topic\_arn](#output\_alarms\_topic\_arn) | ARN of the encrypted SNS topic both alarms notify, on alarm and on recovery |
 | <a name="output_state_machine_arn"></a> [state\_machine\_arn](#output\_state\_machine\_arn) | ARN of the controller state machine, for manual Start execution tests |
 <!-- END_TF_DOCS -->
