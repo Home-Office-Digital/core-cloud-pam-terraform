@@ -105,6 +105,11 @@ run "safe_by_default" {
   }
 
   assert {
+    condition     = strcontains(jsondecode(aws_sfn_state_machine.controller.definition).States["Sweep: targets"].Assign.targets, "$exists($i.applicationArns.Ss) ? $i.applicationArns.Ss") && strcontains(jsondecode(aws_sfn_state_machine.controller.definition).States["Sweep: targets"].Assign.targets, "$l.activeRequestIds.Ss")
+    error_message = "The sweep's scans are AWS SDK calls, which return string sets as Ss: it must read Ss for registry applications and ledger request ids, or it misses applications and checks people twice."
+  }
+
+  assert {
     condition     = jsondecode(aws_sfn_state_machine.controller.definition).States.Start.Assign.dryRun == true
     error_message = "dry_run must default to true."
   }
